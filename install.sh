@@ -186,6 +186,7 @@ step "1/4" "Ton Mac"
 if [ "$(uname -s)" != "Darwin" ] || [ "$(uname -m)" != "arm64" ]; then ko "LocalFlow nécessite un Mac Apple Silicon (M1, M2, M3, M4…)."; exit 1; fi
 CHIP="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo 'Apple Silicon')"
 RAM=$(( $(sysctl -n hw.memsize) / 1073741824 )); FREE=$(df -g "$HOME" | awk 'NR==2{print $4}')
+if [ "$(sw_vers -productVersion | cut -d. -f1)" -lt 14 ]; then ko "Il faut macOS 14 (Sonoma) ou plus récent — tu as macOS $(sw_vers -productVersion). Mets à jour ton Mac, puis relance."; exit 1; fi
 ok "$CHIP · ${RAM} Go de RAM · macOS $(sw_vers -productVersion)"
 if [ "$FREE" -lt 8 ]; then ko "Il faut 8 Go libres (tu en as ${FREE}). Libère de la place puis relance la commande."; exit 1; fi
 ok "${FREE} Go libres sur le disque"

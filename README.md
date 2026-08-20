@@ -17,7 +17,7 @@ Version légère (sans nettoyage IA, ~1,6 Go) : ajoute `-s -- --minimal` à la f
 1. Confidentialité et sécurité → **Accessibilité** → `+` → `LocalFlow.app` (dans `~/Applications/LocalFlow`) → activer.
 2. Accepter la demande **Micro** au premier appui sur `fn`.
 
-Prérequis : Mac Apple Silicon (M1+), macOS 13+, 16 Go de RAM conseillés.
+Prérequis : Mac Apple Silicon (M1+), macOS 14+, 16 Go de RAM conseillés.
 
 ## Utilisation
 

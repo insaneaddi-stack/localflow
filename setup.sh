@@ -11,6 +11,10 @@ want() { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
 if [ "$(uname -s)" != "Darwin" ] || [ "$(uname -m)" != "arm64" ]; then
   echo "❌ LocalFlow nécessite un Mac Apple Silicon (M1 ou plus récent)." >&2; exit 1
 fi
+MACOS_MAJOR="$(sw_vers -productVersion | cut -d. -f1)"
+if [ "$MACOS_MAJOR" -lt 14 ]; then
+  echo "❌ LocalFlow nécessite macOS 14 (Sonoma) ou plus récent — tu as macOS $(sw_vers -productVersion). Mets à jour via Réglages → Général → Mise à jour." >&2; exit 1
+fi
 case "$(pwd)" in
   "$HOME/Desktop"*|"$HOME/Documents"*|"$HOME/Downloads"*)
     echo "❌ Installe LocalFlow hors de Bureau/Documents/Téléchargements (macOS bloque l'agent là-dedans)." >&2
@@ -18,6 +22,7 @@ case "$(pwd)" in
 esac
 
 find_python() {
+  [ "${LOCALFLOW_FORCE_UV:-0}" = 1 ] && return 1   # test : simule un Mac sans Python
   # Mac neuf : /usr/bin/python3 est un leurre qui ouvre « installer les outils développeur ».
   # On ne l'essaie que si les Command Line Tools sont déjà là.
   local cands="python3.12 python3.13 python3.11 python3.10 /opt/homebrew/bin/python3.12 /opt/homebrew/bin/python3.13"
