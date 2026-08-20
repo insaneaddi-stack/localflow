@@ -207,7 +207,7 @@ dl() { local tmp src; tmp="$(mktemp -d)"
   src="$(find "$tmp" -maxdepth 1 -mindepth 1 -type d | head -1)"
   (cd "$src" && tar -cf - --exclude .venv .) | (cd "$DEST" && tar -xf -); rm -rf "$tmp"; chmod +x "$DEST"/*.sh
   curl -fsSL -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPO/commits/main" 2>/dev/null \
-    | sed -n 's/^ *"sha": *"\([0-9a-f]*\)".*/\1/p' | head -1 > "$DEST/.installed-sha" || true; }
+    | grep -o '"sha": *"[0-9a-f]\{40\}"' | head -1 | grep -o '[0-9a-f]\{40\}' > "$DEST/.installed-sha" || true; }
 run "Téléchargement de LocalFlow" work dl || exit 1
 cd "$DEST" 2>/dev/null || { [ "$DEMO" = 1 ] || exit 1; }
 export LOCALFLOW_WIZARD=1

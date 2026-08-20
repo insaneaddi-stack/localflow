@@ -20,7 +20,7 @@ restore() {
 # 1. télécharger
 curl -fsSL "https://github.com/$REPO/archive/refs/heads/main.tar.gz" | tar -xz -C "$TMP" || fail "téléchargement"
 SRC="$(find "$TMP" -maxdepth 1 -mindepth 1 -type d | head -1)"
-SHA="$(curl -fsSL -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$REPO/commits/main" | sed -n 's/^ *"sha": *"\([0-9a-f]*\)".*/\1/p' | head -1)"
+SHA="$(curl -fsSL -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$REPO/commits/main" | grep -o '"sha": *"[0-9a-f]\{40\}"' | head -1 | grep -o '[0-9a-f]\{40\}')"
 [ -n "$SHA" ] || fail "sha distant introuvable"
 [ "$SHA" = "$(cat .installed-sha 2>/dev/null)" ] && { echo "déjà à jour ($SHA)"; rm -rf "$TMP" "$BK"; exit 0; }
 
