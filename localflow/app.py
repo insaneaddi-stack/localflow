@@ -162,6 +162,7 @@ class LocalFlowApp(rumps.App):
         self.item_history = rumps.MenuItem("Historique…", callback=self._open_history)
         self.item_dict = rumps.MenuItem("Dictionnaire…", callback=self._open_dictionary)
         self.item_update = rumps.MenuItem("Vérifier les mises à jour", callback=self._check_update_clicked)
+        self.item_auto_update = self._toggle_item("Mises à jour automatiques", "auto_update")
 
         self.menu = [
             self.item_status,
@@ -179,6 +180,7 @@ class LocalFlowApp(rumps.App):
             self.item_sounds,
             None,
             self.item_update,
+            self.item_auto_update,
             rumps.MenuItem("Quitter", callback=rumps.quit_application),
         ]
         self._refresh_stats()
@@ -205,6 +207,11 @@ class LocalFlowApp(rumps.App):
 
         # Mises à jour : au démarrage (après 20 s) puis toutes les 6 h, silencieux hors-ligne
         self._update_sha = None
+        self._updating = False
+        sha = update.just_updated()
+        if sha:
+            _log(f"mis à jour → {sha[:7]}")
+            _notify("LocalFlow mis à jour", f"Nouvelle version installée ({sha[:7]}).")
         threading.Timer(20, self._check_update).start()
         self._update_timer = rumps.Timer(lambda _t: self._check_update(), 6 * 3600)
         self._update_timer.start()
@@ -219,7 +226,10 @@ class LocalFlowApp(rumps.App):
                     self.item_update.title = "⬆️ Mise à jour disponible — installer…"
                     if first:
                         _log(f"mise à jour disponible : {sha[:7]}")
-                        _notify("Mise à jour disponible", "Menu 🎙 → Mise à jour disponible — installer…")
+                        if self.config.auto_update and not update.IS_DEV:
+                            self._auto_update_when_idle()
+                        else:
+                            _notify("Mise à jour disponible", "Menu 🎙 → Mise à jour disponible — installer…")
                 else:
                     self._update_sha = None
                     self.item_update.title = "Vérifier les mises à jour"
@@ -227,6 +237,18 @@ class LocalFlowApp(rumps.App):
                         _notify("LocalFlow", "Tu as la dernière version.")
             _on_main(apply)
         threading.Thread(target=work, daemon=True).start()
+
+    def _auto_update_when_idle(self):
+        """Lance update.sh dès que l'utilisateur n'est pas en train de dicter."""
+        if self._updating:
+            return
+        if self.recorder.recording or self._busy or self.hands_free:
+            threading.Timer(30, lambda: _on_main(self._auto_update_when_idle)).start()
+            return
+        self._updating = True
+        _log("mise à jour automatique lancée")
+        _notify("Mise à jour", "LocalFlow se met à jour en arrière-plan (quelques secondes)…")
+        update.run_silent()
 
     def _check_update_clicked(self, _item):
         if self._update_sha:

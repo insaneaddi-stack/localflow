@@ -14,16 +14,31 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SHA_FILE = os.path.join(ROOT, ".installed-sha")
 INSTALL_CMD = f"curl -fsSL https://raw.githubusercontent.com/{REPO}/main/install.sh | bash"
 
+IS_DEV = os.path.isdir(os.path.join(ROOT, ".git"))
+UPDATED_FLAG = os.path.join(ROOT, ".updated-flag")
+
 def installed_sha() -> str:
     try:
         with open(SHA_FILE) as f:
             return f.read().strip()
     except OSError:
         pass
-    try:  # dépôt git (développement)
-        return subprocess.run(["git", "-C", ROOT, "rev-parse", "HEAD"], capture_output=True, text=True, timeout=5).stdout.strip()
+    if IS_DEV:
+        try:
+            return subprocess.run(["git", "-C", ROOT, "rev-parse", "HEAD"], capture_output=True, text=True, timeout=5).stdout.strip()
+        except Exception:
+            pass
+    return ""
+
+def _known_locally(sha: str) -> bool:
+    """Dépôt git : le commit distant est-il déjà dans l'historique local (= on est en avance) ?"""
+    if not IS_DEV:
+        return False
+    try:
+        subprocess.run(["git", "-C", ROOT, "fetch", "-q", "origin", "main"], capture_output=True, timeout=15)
+        return subprocess.run(["git", "-C", ROOT, "merge-base", "--is-ancestor", sha, "HEAD"], capture_output=True, timeout=5).returncode == 0
     except Exception:
-        return ""
+        return False
 
 def remote_sha(timeout=6) -> str:
     req = urllib.request.Request(
@@ -38,11 +53,26 @@ def check():
     try:
         local = installed_sha()
         remote = remote_sha()
-        if remote and local and remote != local:
+        if remote and local and remote != local and not _known_locally(remote):
             return remote
     except Exception:
         pass
     return None
+
+def run_silent():
+    """Mise à jour automatique en arrière-plan (update.sh) ; l'app est relancée à la fin."""
+    subprocess.Popen(["/bin/bash", os.path.join(ROOT, "update.sh")], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+
+def just_updated() -> str:
+    """sha si l'app vient d'être mise à jour (drapeau posé par update.sh), puis efface le drapeau."""
+    try:
+        with open(UPDATED_FLAG) as f:
+            sha = f.read().strip()
+        os.remove(UPDATED_FLAG)
+        return sha
+    except OSError:
+        return ""
 
 def launch():
     """Lance la mise à jour dans le Terminal (l'assistant relance LocalFlow à la fin)."""

@@ -314,7 +314,7 @@ class HistoryWindow(NSObject):
         wk = s["week"]
         self.statsview.week = self.config.weekly()
         self.statsview.apps = self.config.top_apps()
-        self.statsview.saved = f"≈ {_fmt_min(wk['saved_min'])} gagnées cette semaine · {wk['words']} mots"
+        self.statsview.saved = f"≈ {_fmt_min(wk['saved_min'])} gagnées · {wk['words']:,} mots".replace(",", " ")
         self.statsview.setNeedsDisplay_(True)
 
     def show(self):

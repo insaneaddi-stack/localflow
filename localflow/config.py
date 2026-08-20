@@ -13,6 +13,7 @@ DEFAULTS = {
     "live_paste_fast": True,     # coller le texte du direct (sinon re-transcrit en fin)
     "tone_auto": True,           # adapter le ton à l'app active
     "engine": "whisper",         # "whisper" (précis) ou "parakeet" (rapide)
+    "auto_update": True,         # mise à jour automatique en arrière-plan
     "history": [],               # [{"t": iso, "text": str, "app": str}], plus récent en premier
     "stats": {},                 # {"YYYY-MM-DD": {"words": n, "dictations": n, "audio_s": s}}
 }
@@ -60,6 +61,7 @@ class Config:
     live_enabled = _bool_prop("live_enabled")
     live_paste_fast = _bool_prop("live_paste_fast")
     tone_auto = _bool_prop("tone_auto")
+    auto_update = _bool_prop("auto_update")
 
     @property
     def engine(self):
