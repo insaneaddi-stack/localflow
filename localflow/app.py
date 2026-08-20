@@ -671,8 +671,9 @@ class LocalFlowApp(rumps.App):
                 text = self.transcriber.transcribe(audio, prompt=self._asr_prompt())
                 source = self.transcriber.name
 
-            if text and len(text.split()) > max(6, voiced * 5.0):
-                _log(f"rejeté : {len(text.split())} mots pour {voiced:.1f}s de voix (hallucination probable)")
+            seconds = len(audio) / SAMPLE_RATE
+            if text and len(text.split()) > seconds * 4.5 + 4:   # > 4,5 mots/s : impossible
+                _log(f"rejeté : {len(text.split())} mots pour {seconds:.1f}s d'audio (hallucination probable)")
                 text = ""
             text = self.learner.apply(self.dictionary.apply(text))
             learn = parse_learn_command(text)
