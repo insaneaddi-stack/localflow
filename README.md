@@ -31,7 +31,8 @@ Prérequis : Mac Apple Silicon (M1+), macOS 14+, 16 Go de RAM conseillés.
 | « efface ça » | Annule le dernier collage |
 | « corrige mail en main » | Apprend une correction |
 
-- **Moteur** : Whisper large-v3-turbo (MLX), FR/EN auto. Option « Moteur rapide » : Parakeet TDT 0.6B.
+- **Moteur** (menu 🎙 → Moteur) : Équilibré = Whisper large-v3-turbo (~0,7 s) · Précision max = Whisper large-v3 (~2 s, 3 Go, téléchargé à la demande) · Rapide = Parakeet (~0,4 s).
+- **Fiabilité** : prompt de style + dictionnaire donnés à Whisper, repli automatique en température, seconde passe en contexte complet si la sortie semble tronquée, passe-haut 80 Hz + gain automatique ; les 5 derniers enregistrements sont gardés dans `~/Library/Caches/LocalFlow/` pour diagnostiquer.
 - **Dictionnaire** : menu 🎙 → Dictionnaire… (`~/.localflow.dict.txt`) — noms propres respectés, `mauvais -> bon`.
 - **Apprentissage** : si tu corriges à la main un mot collé, LocalFlow le remarque ; vu 2 fois, il l'applique.
 - **Gain automatique** : fonctionne même en parlant loin du Mac.

@@ -148,8 +148,15 @@ class LocalFlowApp(rumps.App):
         self.item_fast = self._toggle_item("Coller le direct (plus rapide)", "live_paste_fast")
         self.item_tone = self._toggle_item("Ton adapté à l'app", "tone_auto")
         self.item_sounds = self._toggle_item("Sons", "sounds_enabled")
-        self.item_engine = rumps.MenuItem("Moteur rapide (Parakeet) — moins précis", callback=self._toggle_engine)
-        self.item_engine.state = self.config.engine == "parakeet"
+        self.item_engine = rumps.MenuItem("Moteur", callback=None)
+        self._engine_items = {}
+        for key, label in (("whisper", "Équilibré — Whisper turbo (~0,7 s)"),
+                           ("whisper-max", "Précision max — Whisper large-v3 (~2 s, 3 Go)"),
+                           ("parakeet", "Rapide — Parakeet (~0,4 s, moins précis)")):
+            it = rumps.MenuItem(label, callback=lambda item, k=key: self._set_engine(k))
+            it.state = self.config.engine == key
+            self._engine_items[key] = it
+            self.item_engine.add(it)
         self.item_panel = rumps.MenuItem("Panneau (double-tap fn)", callback=lambda _i: self.overlay.toggle_expanded())
         self.item_history = rumps.MenuItem("Historique…", callback=self._open_history)
         self.item_dict = rumps.MenuItem("Dictionnaire…", callback=self._open_dictionary)
@@ -214,10 +221,12 @@ class LocalFlowApp(rumps.App):
         delay = 5
         while self.transcriber is None:
             try:
-                if self.config.engine == "whisper":
+                if self.config.engine in ("whisper", "whisper-max"):
                     try:
                         from .transcribe import WhisperTranscriber
-                        self.transcriber = WhisperTranscriber()
+                        if self.config.engine == "whisper-max":
+                            os.environ.pop("HF_HUB_OFFLINE", None)  # téléchargement à la demande autorisé
+                        self.transcriber = WhisperTranscriber(self.config.engine)
                     except Exception:
                         _log("Whisper indisponible, repli sur Parakeet:\n" + traceback.format_exc())
                         _notify("Whisper indisponible", "Repli sur Parakeet (moins précis).")
@@ -273,10 +282,14 @@ class LocalFlowApp(rumps.App):
             _log("Parakeet chargé")
         return self.parakeet
 
-    def _toggle_engine(self, item):
-        item.state = not item.state
-        self.config.engine = "parakeet" if item.state else "whisper"
-        _notify("Moteur", "Changement pris en compte au prochain démarrage (menu Quitter : relance auto).")
+    def _set_engine(self, key):
+        if key == self.config.engine:
+            return
+        self.config.engine = key
+        for k, it in self._engine_items.items():
+            it.state = k == key
+        msg = "Le modèle (~3 Go) sera téléchargé au redémarrage." if key == "whisper-max" else "Pris en compte au redémarrage."
+        _notify("Moteur", msg + " Relance : menu Quitter (relance automatique).")
 
     def _asr_prompt(self):
         """Contexte passé à Whisper : dictionnaire + corrections apprises."""
@@ -547,9 +560,16 @@ class LocalFlowApp(rumps.App):
     # ---------- pipeline ----------
 
     def _save_debug(self, audio):
+        """Garde les 5 derniers enregistrements (last.wav = le plus récent) pour diagnostiquer."""
         try:
             import wave
-            os.makedirs(os.path.dirname(DEBUG_WAV), exist_ok=True)
+            d = os.path.dirname(DEBUG_WAV)
+            os.makedirs(d, exist_ok=True)
+            for i in range(4, 0, -1):
+                src = os.path.join(d, f"last-{i}.wav") if i > 1 else DEBUG_WAV
+                dst = os.path.join(d, f"last-{i + 1}.wav")
+                if os.path.exists(src):
+                    os.replace(src, dst)
             with wave.open(DEBUG_WAV, "wb") as w:
                 w.setnchannels(1); w.setsampwidth(2); w.setframerate(SAMPLE_RATE)
                 w.writeframes((np.clip(audio, -1, 1) * 32767).astype(np.int16).tobytes())
@@ -601,7 +621,9 @@ class LocalFlowApp(rumps.App):
                 _on_main(self.history_window.refresh)
                 _on_main(self.overlay.refresh)
                 # Le texte dicté n'est PAS écrit dans le log (vie privée).
-                _log(f"{how} en {time.time()-t0:.1f}s via {source} ({words} mots, ton {tone}, app {app_name or '?'})")
+                retry = getattr(self.transcriber, "last_retry", "")
+                _log(f"{how} en {time.time()-t0:.1f}s via {source} ({words} mots, ton {tone}, app {app_name or '?'})"
+                     + (f" — 2e passe : {retry}" if retry else ""))
             else:
                 _log("transcription vide, rien à coller")
         except Exception as exc:

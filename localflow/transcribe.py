@@ -151,26 +151,47 @@ def _patch_mlx_whisper():
     T.pad_or_trim = pad_dyn
     T._localflow_patched = True
 
+WHISPER_MODELS = {
+    "whisper": "mlx-community/whisper-large-v3-turbo",      # équilibré : ~0,7 s
+    "whisper-max": "mlx-community/whisper-large-v3-mlx",    # précision max : ~2 s, ~3 Go
+}
+# Mesuré sur de vrais enregistrements : ce style neutre garde chaque mot (y compris familiers)
+# et ponctue bien ; « ponctuation soignée » poussait Whisper à censurer/lisser.
+STYLE_PROMPT = {
+    "fr": "Voici une dictée en français.",
+    "en": "This is an English dictation.",
+}
+
+def _looks_broken(text: str, seconds: float) -> str:
+    """Renvoie la raison si la transcription semble tronquée/boucle, sinon ''."""
+    words = text.split()
+    if seconds >= 3.0 and len(words) < max(2, seconds * 0.9):
+        return f"trop court ({len(words)} mots pour {seconds:.0f}s)"
+    if len(words) >= 9:
+        grams = [" ".join(words[i:i + 3]).lower() for i in range(len(words) - 2)]
+        top = max(grams.count(g) for g in set(grams))
+        if top >= 3:
+            return "répétition en boucle"
+    return ""
+
 class WhisperTranscriber:
-    """Whisper large-v3-turbo (MLX) : plus précis en français que Parakeet,
-    et accepte un contexte (dictionnaire perso) qui oriente l'orthographe."""
+    """Whisper (MLX) : précis en français, accepte un contexte (style + dictionnaire)
+    qui oriente ponctuation et orthographe. Repli automatique si la sortie est suspecte."""
 
-    name = "whisper"
-
-    def __init__(self):
+    def __init__(self, variant: str = "whisper"):
         import mlx_whisper
         import mlx.core as mx
         from mlx_whisper.transcribe import ModelHolder
 
         _patch_mlx_whisper()
+        self.name = variant
+        self.model_id = WHISPER_MODELS.get(variant, WHISPER_MODELS["whisper"])
         self._mw = mlx_whisper
         self._mx = mx
-        self._model = ModelHolder.get_model(WHISPER_MODEL_ID, mx.float16)
-        # chauffe (compilation des kernels) : une détection + une transcription
-        self.transcribe(np.zeros(SAMPLE_RATE * 2, dtype=np.float32))
+        self._model = ModelHolder.get_model(self.model_id, mx.float16)
+        self.transcribe(np.zeros(SAMPLE_RATE * 2, dtype=np.float32))  # chauffe
 
     def detect_language(self, pcm: np.ndarray) -> str:
-        """FR ou EN, sur les premières secondes, avec un contexte minuscule (~0,1 s)."""
         from mlx_whisper.audio import log_mel_spectrogram, pad_or_trim
 
         try:
@@ -180,43 +201,64 @@ class WhisperTranscriber:
             n += n % 2
             seg = pad_or_trim(mel, max(500, n), axis=-2).astype(self._mx.float16)
             _, probs = self._model.detect_language(seg)
-            best = max(ALLOWED_LANGS, key=lambda l: probs.get(l, 0.0))
-            return best
+            return max(ALLOWED_LANGS, key=lambda l: probs.get(l, 0.0))
         except Exception:
             return "fr"
 
-    def transcribe(self, audio: np.ndarray, prompt: str = "") -> str:
-        pcm = np.clip(np.asarray(audio, dtype=np.float32), -1.0, 1.0)
-        lang = self.detect_language(pcm)
-        kwargs = dict(
-            path_or_hf_repo=WHISPER_MODEL_ID,
-            language=lang,
-            without_timestamps=True,          # moins de tokens à générer
-            temperature=0.0,
-            condition_on_previous_text=False,  # évite les boucles/hallucinations
-            compression_ratio_threshold=2.4,
-        )
-        if prompt:
-            kwargs["initial_prompt"] = prompt[:600]
-        result = self._mw.transcribe(pcm, **kwargs)
+    def _decode(self, pcm, lang, prompt, full_context=False, fallback=False):
+        global WHISPER_MIN_FRAMES
+        saved = WHISPER_MIN_FRAMES
+        if full_context:
+            WHISPER_MIN_FRAMES = 3000
+        try:
+            kwargs = dict(
+                path_or_hf_repo=self.model_id,
+                language=lang,
+                without_timestamps=True,
+                condition_on_previous_text=False,
+                compression_ratio_threshold=2.4,
+                logprob_threshold=-1.0,
+                no_speech_threshold=0.6,
+                temperature=(0.0, 0.2, 0.4) if fallback else 0.0,
+            )
+            style = STYLE_PROMPT.get(lang, "")
+            full_prompt = (style + " " + prompt).strip() if prompt else style
+            if full_prompt:
+                kwargs["initial_prompt"] = full_prompt[:700]
+            result = self._mw.transcribe(pcm, **kwargs)
+        finally:
+            WHISPER_MIN_FRAMES = saved
         segs = result.get("segments") or []
         if not segs:
             return result.get("text", "").strip()
-        # Sur le silence/bruit, whisper-turbo « invente » (« Thank you. », « you »…)
-        # avec no_speech_prob=0 : on filtre sur la confiance et une liste noire.
         kept = []
         for seg in segs:
             txt = seg.get("text", "").strip()
             if not txt:
                 continue
             short = len(txt.split()) <= 2
-            # faible confiance : on ne jette QUE les bribes (jamais une phrase entière)
             if short and seg.get("avg_logprob", 0.0) < -0.9:
                 continue
             if short and _is_hallucination(txt):
                 continue
             kept.append(txt)
         return " ".join(kept).strip()
+
+    def transcribe(self, audio: np.ndarray, prompt: str = "") -> str:
+        pcm = np.clip(np.asarray(audio, dtype=np.float32), -1.0, 1.0)
+        seconds = len(pcm) / SAMPLE_RATE
+        lang = self.detect_language(pcm)
+        text = self._decode(pcm, lang, prompt)
+        reason = _looks_broken(text, seconds) if seconds >= 1.0 else ""
+        if reason:
+            # seconde passe : contexte complet 30 s + repli température
+            retry = self._decode(pcm, lang, prompt, full_context=True, fallback=True)
+            self.last_retry = reason
+            if len(retry.split()) >= len(text.split()):
+                text = retry
+        else:
+            self.last_retry = ""
+        return text
 
 _HALLUCINATIONS = {
     "thank you", "thanks", "you", "bye", "thank you for watching", "thanks for watching",

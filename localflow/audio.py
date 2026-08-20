@@ -26,6 +26,8 @@ NOISE_FLOOR = 0.002
 ATTACK = 0.6
 RELEASE = 0.08
 
+_HP_ALPHA = 1.0 / (1.0 + 2 * np.pi * 80.0 / SAMPLE_RATE)  # passe-haut 80 Hz, 1er ordre
+
 def _soft_limit(x):
     return np.where(np.abs(x) > 0.8, np.sign(x) * (0.8 + 0.2 * np.tanh((np.abs(x) - 0.8) / 0.2)), x)
 
@@ -41,6 +43,8 @@ class Recorder:
         self._level = 0.0
         self._gain = 1.0
         self._last_callback = 0.0
+        self._hp_x = 0.0
+        self._hp_y = 0.0
         self.live_queue = None
 
     # ---- flux permanent ----
@@ -92,6 +96,15 @@ class Recorder:
     def _callback(self, indata, frames, time_info, status):
         self._last_callback = time.time()
         mono = indata[:, 0].astype(np.float32)
+        # passe-haut : retire grondements, souffle de ventilation, chocs sur la table
+        y = np.empty_like(mono)
+        px, py = self._hp_x, self._hp_y
+        for i in range(len(mono)):
+            py = _HP_ALPHA * (py + mono[i] - px)
+            px = mono[i]
+            y[i] = py
+        self._hp_x, self._hp_y = px, py
+        mono = y
         rms = float(np.sqrt(np.mean(mono ** 2)) + 1e-9)
         if rms > NOISE_FLOOR:
             wanted = min(MAX_GAIN, max(1.0, TARGET_RMS / rms))
