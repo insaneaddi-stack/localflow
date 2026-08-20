@@ -18,9 +18,15 @@ case "$(pwd)" in
 esac
 
 find_python() {
-  for p in python3.12 python3.13 python3.11 python3.10 /opt/homebrew/bin/python3.12 /opt/homebrew/bin/python3.13 python3; do
-    if command -v "$p" >/dev/null 2>&1 && "$p" -c 'import sys; sys.exit(0 if (3,10) <= sys.version_info < (3,14) else 1)' 2>/dev/null; then
-      command -v "$p"; return 0
+  # Mac neuf : /usr/bin/python3 est un leurre qui ouvre « installer les outils développeur ».
+  # On ne l'essaie que si les Command Line Tools sont déjà là.
+  local cands="python3.12 python3.13 python3.11 python3.10 /opt/homebrew/bin/python3.12 /opt/homebrew/bin/python3.13"
+  xcode-select -p >/dev/null 2>&1 && cands="$cands python3"
+  for p in $cands; do
+    local path; path="$(command -v "$p" 2>/dev/null)" || continue
+    [ "$path" = "/usr/bin/python3" ] && ! xcode-select -p >/dev/null 2>&1 && continue
+    if "$path" -c 'import sys; sys.exit(0 if (3,10) <= sys.version_info < (3,14) else 1)' 2>/dev/null; then
+      echo "$path"; return 0
     fi
   done
   return 1
@@ -39,18 +45,35 @@ if want python && [ ! -x .venv/bin/python ]; then
   fi
 fi
 
+STAMP=.venv/.requirements.sha
+REQ_SHA="$(shasum -a 256 requirements.txt | cut -c1-16)"
 if want python; then
-  echo "==> Dépendances Python…"
-  .venv/bin/python -m pip install --upgrade pip -q
-  .venv/bin/python -m pip install -r requirements.txt -q
+  if [ -f "$STAMP" ] && [ "$(cat "$STAMP")" = "$REQ_SHA" ] && .venv/bin/python -c "import mlx_whisper, rumps, sounddevice, AVFoundation" 2>/dev/null; then
+    echo "==> Dépendances Python : déjà installées [SKIP]"
+  else
+    echo "==> Dépendances Python…"
+    .venv/bin/python -m pip install --upgrade pip -q
+    .venv/bin/python -m pip install -r requirements.txt -q
+    echo "$REQ_SHA" > "$STAMP"
+  fi
 fi
+model_cached() {  # model_cached <repo> : vrai si les poids sont déjà dans le cache Hugging Face
+  local d="$HOME/.cache/huggingface/hub/models--${1//\//--}"
+  [ -d "$d/snapshots" ] && find -L "$d/snapshots" -name "*.safetensors" -size +1M 2>/dev/null | grep -q . && [ -z "$(find "$d" -name '*.incomplete' 2>/dev/null)" ]
+}
 if want whisper; then
-  echo "==> Modèle Whisper large-v3-turbo (~1,6 Go, une seule fois)…"
-  .venv/bin/python -c "import mlx_whisper, numpy as np; mlx_whisper.transcribe(np.zeros(16000, dtype=np.float32), path_or_hf_repo='mlx-community/whisper-large-v3-turbo', language='fr')" >/dev/null
+  if model_cached mlx-community/whisper-large-v3-turbo; then echo "==> Modèle Whisper : déjà présent [SKIP]"
+  else
+    echo "==> Modèle Whisper large-v3-turbo (~1,6 Go, une seule fois)…"
+    .venv/bin/python -c "import mlx_whisper, numpy as np; mlx_whisper.transcribe(np.zeros(16000, dtype=np.float32), path_or_hf_repo='mlx-community/whisper-large-v3-turbo', language='fr')" >/dev/null
+  fi
 fi
 if want qwen && [ "$MINIMAL" = 0 ]; then
-  echo "==> Modèle Qwen3-1.7B 4-bit pour le nettoyage IA (~1 Go)…"
-  .venv/bin/python -c "from mlx_lm import load; load('mlx-community/Qwen3-1.7B-4bit')" >/dev/null
+  if model_cached mlx-community/Qwen3-1.7B-4bit; then echo "==> Modèle Qwen : déjà présent [SKIP]"
+  else
+    echo "==> Modèle Qwen3-1.7B 4-bit pour le nettoyage IA (~1 Go)…"
+    .venv/bin/python -c "from mlx_lm import load; load('mlx-community/Qwen3-1.7B-4bit')" >/dev/null
+  fi
 fi
 if want app; then
   echo "==> Bundle LocalFlow.app…"

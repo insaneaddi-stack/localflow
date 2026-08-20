@@ -23,7 +23,8 @@ SHOW_ORB=1; [ "$COLS" -lt 78 ] && SHOW_ORB=0
 BANNER_W=$(( ORB_COL - 6 ))
 TEXT_ROW=10
 
-cleanup() { printf '\033[r'; tput cup $((ROWS-1)) 0 2>/dev/null; tput cnorm 2>/dev/null; printf '%s\n' "$N"; }
+SUMMARY=""
+cleanup() { printf '\033[r'; tput rmcup 2>/dev/null; tput cnorm 2>/dev/null; printf '%s' "$N"; [ -n "$SUMMARY" ] && printf '\n%s\n' "$SUMMARY"; }
 trap cleanup EXIT
 trap 'exit 130' INT
 
@@ -113,19 +114,34 @@ ok()   { say "$(c $OK)✓$N  $*"; }
 ko()   { say "$(c $KO)✗$N  $*"; }
 blank(){ newline; at $LINE 0; printf '\033[K'; LINE=$((LINE+1)); }
 step() { blank; say "$(c $VIO)$B$1$N  $B$2$N"; }
-ask()  { newline; { at $LINE 3; printf '\033[K   %s' "$1"; tput cnorm; } > /dev/tty; local a; read -r a < /dev/tty || a=""; tput civis > /dev/tty; LINE=$((LINE+1)); printf '%s' "$a"; }
+ANSWER=""
+ask()  {  # ask "question" → réponse dans $ANSWER (pas de sous-shell, pas d'écho de la touche Entrée)
+  newline; at $LINE 3; printf '\033[K   %s' "$1"; tput cnorm
+  ANSWER=""; read -rs ANSWER < /dev/tty || ANSWER=""
+  printf '%s' "$ANSWER"; tput civis; LINE=$((LINE+1))
+}
 
 run() {  # run "message" <mood> cmd…  — exécute en fond, anime orbe + barre
   local msg="$1" mood="$2"; shift 2
   newline; local row=$LINE; LINE=$((LINE+1)); local t=0 w=24
+  local mark; mark="$(wc -l < "$LOG" | tr -d ' ')"
   if [ "$DEMO" = 1 ]; then (sleep 2.5) & else ("$@") >>"$LOG" 2>&1 & fi
   local pid=$!
   while kill -0 $pid 2>/dev/null; do
     at $row 3; printf '\033[K   %s  %s' "$(bar $t $w)" "$msg"
     orb_frame $t "$mood"; t=$((t+1)); sleep 0.08
   done
-  if wait $pid; then at $row 3; printf '\033[K   %s  %s' "$(bar_done $t $w)" "$msg"; return 0
-  else at $row 3; printf '\033[K   %s%s%s  %s' "$(c $KO)" "$(printf '━%.0s' $(seq 1 $w))" "$N" "$msg  $(c $KO)échec — détails : $LOG$N"; return 1; fi
+  if wait $pid; then
+    local note=""; tail -n +"$((mark+1))" "$LOG" | grep -q '\[SKIP\]' && note="  $(c $MUT)déjà installé$N"
+    at $row 3; printf '\033[K   %s  %s%s' "$(bar_done $t $w)" "$msg" "$note"; return 0
+  else
+    at $row 3; printf '\033[K   %s%s%s  %s' "$(c $KO)" "$(printf '━%.0s' $(seq 1 $w))" "$N" "$msg  $(c $KO)échec$N"
+    blank; say "$(c $KO)Ce qui s'est passé (détails complets : $LOG) :$N"
+    tail -n +"$((mark+1))" "$LOG" | grep -v '^\s*$' | tail -6 | cut -c1-$((COLS-8)) | while IFS= read -r l; do say "   $(c $MUT)$l$N"; done
+    blank; say "Envoie ce fichier à Louqman : $B~/.localflow-install.log$N — et relance la commande plus tard, tout est conservé."
+    SUMMARY="$(c $KO)✗ Installation interrompue.$N Détails : $LOG"
+    return 1
+  fi
 }
 wait_until() {  # wait_until <mood> <timeout_s> <hint_every_s> "hint" cmd…
   local mood=$1 timeout=$2 every=$3 hint=$4; shift 4
@@ -156,8 +172,8 @@ celebrate() {  # petite pluie d'étincelles autour de l'orbe
 }
 
 # ─── écran ───────────────────────────────────────────────────────────────────
-tput civis; clear
-printf '\033[%d;%dr' $((TEXT_ROW+1)) $ROWS   # région de défilement (1-based)
+tput smcup 2>/dev/null; tput civis; clear
+printf '\033[%d;%dr' $((TEXT_ROW+1)) $ROWS   # région de défilement (1-based) : bannière et orbe fixes
 at 2 3;  gradient_text "L O C A L F L O W"; printf '   %s%s%s' "$D" "dictée vocale · locale · hors-ligne" "$N"
 at 4 3;  printf '%sMaintiens %sfn%s%s, parle, relâche : c'"'"'est collé.%s' "$(c 250)" "$N$B" "$N" "$(c 250)" "$N"
 at 5 3;  printf '%sRien ne quitte ton Mac. 5 à 10 min, je te guide.%s' "$(c 250)" "$N"
@@ -178,8 +194,8 @@ ok "${FREE} Go libres sur le disque"
 step "2/4" "Quelle version ?"
 say "   $B 1 $N Complète   $(c $MUT)recommandée · ~2,6 Go · nettoyage IA en option$N"
 say "   $B 2 $N Légère     $(c $MUT)~1,6 Go · parfaite si 8 Go de RAM$N"
-CHOICE="$(ask "Ton choix, puis Entrée  [1] : ")"
-MIN=""; [ "$CHOICE" = "2" ] && MIN="--minimal"
+ask "Ton choix, puis Entrée  [1] : "
+MIN=""; [ "$ANSWER" = "2" ] && MIN="--minimal"
 ok "Version $([ -n "$MIN" ] && echo légère || echo complète)"
 
 # 3 ── l'installation
@@ -231,3 +247,7 @@ say "   $B Double-tap fn $N                  →  panneau : historique, réglage
 say "   $(c $MUT)Dis « à la ligne », « point d'interrogation », « efface ça »…$N"
 say "   $(c $MUT)Essaie tout de suite dans un champ de texte.$N"
 blank
+say "$(c $MUT)Appuie sur Entrée pour fermer cet écran.$N"
+read -rs _ < /dev/tty || true
+SUMMARY="$(c $OK)${B}✓ LocalFlow est installé.$N  Maintiens fn, parle, relâche · fn+espace = mains-libres · double-tap fn = panneau
+  Si un jour ça ne répond plus : Réglages → Confidentialité → Accessibilité / Micro → LocalFlow."

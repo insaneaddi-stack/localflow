@@ -6,8 +6,7 @@ cd "$(dirname "$0")"
 ROOT="$(pwd)"
 LABEL=com.louqui.localflow
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-PYVER="$(.venv/bin/python -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')"
-SITE="$ROOT/.venv/lib/python$PYVER/site-packages"
+. ./env.sh
 pkill -f "localflow.app" 2>/dev/null || true
 mkdir -p "$HOME/Library/LaunchAgents"
 cat > "$PLIST" <<PLIST
@@ -32,7 +31,9 @@ cat > "$PLIST" <<PLIST
     <key>EnvironmentVariables</key>
     <dict>
         <key>HF_HUB_OFFLINE</key><string>1</string>
-        <key>PYTHONPATH</key><string>$ROOT:$SITE</string>
+        <key>PYTHONPATH</key><string>$PYTHONPATH</string>
+        <key>DYLD_FALLBACK_LIBRARY_PATH</key><string>$DYLD_FALLBACK_LIBRARY_PATH</string>
+        <key>PYTHONHOME</key><string>$PYTHONHOME</string>
         <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
     </dict>
 </dict>
