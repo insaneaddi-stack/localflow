@@ -46,7 +46,7 @@ DOUBLE_TAP_S = 0.45      # deux taps rapprochés : ouvre/ferme le panneau
 TAIL_S = 0.35            # audio conservé après le relâchement (dernier mot)
 DEBUG_WAV = os.path.expanduser("~/Library/Caches/LocalFlow/last.wav")  # dernière dictée, pour diagnostiquer
 MIN_AUDIO_S = 0.35       # ignore les enregistrements plus courts
-MIN_VOICED_S = 0.30      # sans au moins 0,3 s de vraie voix, on ne transcrit pas (anti-hallucination)
+MIN_VOICED_S = 0.12      # seuil bas : le détecteur ne compte que les pics (silence pur = 0,00 s)
 MAX_RECORD_S = 600       # mains-libres : arrêt auto après 10 min
 LIVE_JOIN_S = 15         # attente max du thread « direct » en fin de dictée
 
