@@ -1,0 +1,7 @@
+.venv/
+LocalFlow.app/
+__pycache__/
+*.pyc
+*.log
+.DS_Store
+assets/source.png
