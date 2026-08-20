@@ -31,6 +31,7 @@ from .history_window import HistoryWindow
 from .hotkey import FnListener
 from .learning import Learner, parse_learn_command
 from . import update
+from .tutorial import Tutorial
 from .overlay import Overlay
 from .paste import copy_text, paste_text, press_undo, type_text
 
@@ -162,6 +163,7 @@ class LocalFlowApp(rumps.App):
         self.item_history = rumps.MenuItem("Historique…", callback=self._open_history)
         self.item_dict = rumps.MenuItem("Dictionnaire…", callback=self._open_dictionary)
         self.item_update = rumps.MenuItem("Vérifier les mises à jour", callback=self._check_update_clicked)
+        self.item_tutorial = rumps.MenuItem("Revoir le tutoriel", callback=lambda _i: self.tutorial.show())
         self.item_auto_update = self._toggle_item("Mises à jour automatiques", "auto_update")
 
         self.menu = [
@@ -179,6 +181,7 @@ class LocalFlowApp(rumps.App):
             self.item_engine,
             self.item_sounds,
             None,
+            self.item_tutorial,
             self.item_update,
             self.item_auto_update,
             rumps.MenuItem("Quitter", callback=rumps.quit_application),
@@ -186,6 +189,7 @@ class LocalFlowApp(rumps.App):
         self._refresh_stats()
 
         self.history_window = HistoryWindow.alloc().initWithConfig_notify_(self.config, _notify)
+        self.tutorial = Tutorial(self.config)
         self.overlay = Overlay(lambda: self.recorder.level, self._panel_data, self._panel_action)
         self._last_tap = 0.0
         self._finishing = False
@@ -298,6 +302,8 @@ class LocalFlowApp(rumps.App):
         def ready():
             self.title = ICON_IDLE
             self.item_status.title = "Prêt — maintenir fn, ou fn+espace"
+            if not self.config.data.get("onboarded"):
+                self.tutorial.show()
 
         _on_main(ready)
         _log(f"démarrage: moteur {self.transcriber.name} chargé, prêt")
@@ -383,6 +389,7 @@ class LocalFlowApp(rumps.App):
             if now - self._last_tap < DOUBLE_TAP_S:
                 self._last_tap = 0.0
                 self.overlay.toggle_expanded()  # …double tap : panneau
+                self.tutorial.event("panel")
             else:
                 self._last_tap = now
             return
@@ -398,9 +405,13 @@ class LocalFlowApp(rumps.App):
         self._play(SOUND_START)
         self.title = ICON_HANDS_FREE
         _log("mains-libres activé")
+        self.tutorial.event("handsfree")
 
     def _on_key(self, keycode):
         """Panneau ouvert : 1-4 copie une bulle, Esc ferme. Sinon on ne touche à rien."""
+        if self.tutorial.active and keycode == 53:  # Esc : étape suivante (jamais Entrée : l'ami tape peut-être)
+            self.tutorial.event("key")
+            return True
         if self.overlay.state != "expanded":
             return False
         if keycode == 53:  # Esc
@@ -670,6 +681,7 @@ class LocalFlowApp(rumps.App):
                     paste_text(text)
                     how = "collé"
                 self.learner.remember_paste(text, bundle)
+                _on_main(lambda: self.tutorial.event("dictated"))
                 words = len(text.split())
                 self.config.add_history(text, app=app_name)
                 self.config.add_stat(words, len(audio) / SAMPLE_RATE)
