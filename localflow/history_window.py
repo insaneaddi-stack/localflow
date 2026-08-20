@@ -46,7 +46,8 @@ from Foundation import NSObject
 from .overlay import _BandView, _attrs, _draw_text, _text_width, _white
 from .paste import copy_text
 
-W, H = 760.0, 580.0
+W, H = 760.0, 700.0
+STATS_H = 150.0
 M = 28.0
 ROW_H = 66.0
 BG = 0.045
@@ -164,6 +165,72 @@ class _ListView(NSView):
             _draw_text(e.get("text", "").replace("\n", " ⏎ "),
                        NSMakeRect(rect.origin.x + 40, rect.origin.y + 28, rect.size.width - 60, 18), _attrs(13, 0.93))
 
+class _StatsView(NSView):
+    """Semaine : barres de mots/jour (dégradé violet), apps les plus dictées, temps gagné."""
+
+    def initWithFrame_(self, frame):
+        self = objc.super(_StatsView, self).initWithFrame_(frame)
+        if self is None:
+            return None
+        self.week = []
+        self.apps = []
+        self.saved = ""
+        return self
+
+    def drawRect_(self, r):
+        b = self.bounds()
+        w = b.size.width
+        left_w = w * 0.58
+        # carte de fond
+        card = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(M, 8, w - 2 * M, b.size.height - 16), 16, 16)
+        NSColor.colorWithCalibratedWhite_alpha_(0.06, 1.0).setFill(); card.fill()
+        _white(0.07).setStroke(); card.setLineWidth_(1.0); card.stroke()
+
+        _draw_text("CETTE SEMAINE", NSMakeRect(M + 18, b.size.height - 34, 200, 14), _attrs(10.5, 0.5, weight=0.5))
+        # barres
+        n = max(1, len(self.week))
+        maxv = max([wv for _, wv, _ in self.week] + [1])
+        area_x, area_w = M + 18, left_w - 36
+        gap = 10.0
+        bw = (area_w - gap * (n - 1)) / n
+        base_y, max_h = 40.0, b.size.height - 96
+        today = datetime.date.today()
+        for i, (d, words, dict_) in enumerate(self.week):
+            x = area_x + i * (bw + gap)
+            h = max(3.0, words / maxv * max_h) if words else 3.0
+            is_today = d == today
+            r_, g_, b_ = _BandView.AURAS["default"]
+            top = NSColor.colorWithCalibratedRed_green_blue_alpha_(r_, g_, b_, 0.95 if is_today else 0.55)
+            bot = NSColor.colorWithCalibratedRed_green_blue_alpha_(r_, g_, b_, 0.25 if is_today else 0.10)
+            path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(x, base_y, bw, h), 5, 5)
+            NSGradient.alloc().initWithStartingColor_endingColor_(bot, top).drawInBezierPath_angle_(path, 90.0)
+            if words:
+                va = _attrs(10, 0.8 if is_today else 0.5, weight=0.5)
+                vw = _text_width(str(words), va)
+                _draw_text(str(words), NSMakeRect(x + bw / 2 - vw / 2, base_y + h + 4, vw + 2, 12), va)
+            lbl = "LMMJVSD"[d.weekday()]
+            la = _attrs(10.5, 0.9 if is_today else 0.4, weight=0.5 if is_today else None)
+            lw = _text_width(lbl, la)
+            _draw_text(lbl, NSMakeRect(x + bw / 2 - lw / 2, base_y - 18, lw + 2, 13), la)
+        # séparateur vertical
+        _white(0.07).setFill()
+        NSBezierPath.fillRect_(NSMakeRect(M + left_w, 24, 0.5, b.size.height - 48))
+        # colonne droite : apps + temps gagné
+        rx = M + left_w + 22
+        _draw_text("APPS LES PLUS DICTÉES", NSMakeRect(rx, b.size.height - 34, 220, 14), _attrs(10.5, 0.5, weight=0.5))
+        y = b.size.height - 58
+        if not self.apps:
+            _draw_text("Pas encore de dictée cette semaine.", NSMakeRect(rx, y, 240, 16), _attrs(12, 0.45))
+        for app, cnt in self.apps:
+            r_, g_, b_ = _BandView._aura_color(_BandView, app)
+            NSColor.colorWithCalibratedRed_green_blue_alpha_(r_, g_, b_, 0.95).setFill()
+            NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(rx, y + 4, 8, 8)).fill()
+            _draw_text(app, NSMakeRect(rx + 16, y, 180, 16), _attrs(12.5, 0.92))
+            ca = _attrs(11, 0.45); cw = _text_width(f"{cnt}", ca)
+            _draw_text(f"{cnt}", NSMakeRect(w - M - 18 - cw, y + 1, cw + 2, 14), ca)
+            y -= 24
+        _draw_text(self.saved, NSMakeRect(rx, 22, w - rx - M - 18, 16), _attrs(12, 0.8, weight=0.5))
+
 class _Backdrop(NSView):
     def drawRect_(self, r):
         NSColor.colorWithCalibratedWhite_alpha_(BG, 1.0).setFill()
@@ -209,7 +276,11 @@ class HistoryWindow(NSObject):
         self.search.setFocusRingType_(1)  # none
         content.addSubview_(self.search)
 
-        scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(0, 16, W, H - 136))
+        self.statsview = _StatsView.alloc().initWithFrame_(NSMakeRect(0, H - 120 - STATS_H, W, STATS_H))
+        self.statsview.setAutoresizingMask_(NSViewWidthSizable | NSViewMinYMargin)
+        content.addSubview_(self.statsview)
+
+        scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(0, 16, W, H - 136 - STATS_H))
         scroll.setHasVerticalScroller_(True)
         scroll.setDrawsBackground_(False)
         scroll.setAutoresizingMask_(NSViewWidthSizable | NSViewHeightSizable)
@@ -240,6 +311,11 @@ class HistoryWindow(NSObject):
                                 f"      ·      Total · {a['words']} mots · ≈ {_fmt_min(a['saved_min'])}")
         self.header.count = f"{len(rows)} dictée{'s' if len(rows) != 1 else ''}"
         self.header.setNeedsDisplay_(True)
+        wk = s["week"]
+        self.statsview.week = self.config.weekly()
+        self.statsview.apps = self.config.top_apps()
+        self.statsview.saved = f"≈ {_fmt_min(wk['saved_min'])} gagnées cette semaine · {wk['words']} mots"
+        self.statsview.setNeedsDisplay_(True)
 
     def show(self):
         if self.window is None:

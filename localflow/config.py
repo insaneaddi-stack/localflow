@@ -101,6 +101,31 @@ class Config:
         d["audio_s"] += float(audio_s)
         self.save()
 
+    def weekly(self):
+        """7 derniers jours (du plus ancien à aujourd'hui) : [(date, words, dictations)]."""
+        stats = self.data.get("stats", {})
+        today = datetime.date.today()
+        out = []
+        for k in range(6, -1, -1):
+            d = today - datetime.timedelta(days=k)
+            e = stats.get(d.isoformat(), {})
+            out.append((d, int(e.get("words", 0)), int(e.get("dictations", 0))))
+        return out
+
+    def top_apps(self, n=3, days=7):
+        """Apps les plus dictées sur `days` jours, d'après l'historique : [(app, count)]."""
+        since = datetime.datetime.now() - datetime.timedelta(days=days)
+        counts = {}
+        for e in self.history:
+            try:
+                if datetime.datetime.fromisoformat(e.get("t", "")) < since:
+                    continue
+            except Exception:
+                pass
+            app = e.get("app") or "—"
+            counts[app] = counts.get(app, 0) + 1
+        return sorted(counts.items(), key=lambda kv: -kv[1])[:n]
+
     def stats_summary(self):
         """{'today': {...}, 'week': {...}, 'all': {...}} avec minutes gagnées."""
         stats = self.data.get("stats", {})

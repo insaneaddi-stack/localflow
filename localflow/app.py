@@ -30,6 +30,7 @@ from .dictionary import DICT_PATH, Dictionary
 from .history_window import HistoryWindow
 from .hotkey import FnListener
 from .learning import Learner, parse_learn_command
+from . import update
 from .overlay import Overlay
 from .paste import copy_text, paste_text, press_undo, type_text
 
@@ -160,6 +161,7 @@ class LocalFlowApp(rumps.App):
         self.item_panel = rumps.MenuItem("Panneau (double-tap fn)", callback=lambda _i: self.overlay.toggle_expanded())
         self.item_history = rumps.MenuItem("Historique…", callback=self._open_history)
         self.item_dict = rumps.MenuItem("Dictionnaire…", callback=self._open_dictionary)
+        self.item_update = rumps.MenuItem("Vérifier les mises à jour", callback=self._check_update_clicked)
 
         self.menu = [
             self.item_status,
@@ -176,6 +178,7 @@ class LocalFlowApp(rumps.App):
             self.item_engine,
             self.item_sounds,
             None,
+            self.item_update,
             rumps.MenuItem("Quitter", callback=rumps.quit_application),
         ]
         self._refresh_stats()
@@ -199,6 +202,37 @@ class LocalFlowApp(rumps.App):
 
         self._jobs = queue.Queue()
         threading.Thread(target=self._worker, daemon=True).start()
+
+        # Mises à jour : au démarrage (après 20 s) puis toutes les 6 h, silencieux hors-ligne
+        self._update_sha = None
+        threading.Timer(20, self._check_update).start()
+        self._update_timer = rumps.Timer(lambda _t: self._check_update(), 6 * 3600)
+        self._update_timer.start()
+
+    def _check_update(self, notify_if_none=False):
+        def work():
+            sha = update.check()
+            def apply():
+                if sha:
+                    first = self._update_sha != sha
+                    self._update_sha = sha
+                    self.item_update.title = "⬆️ Mise à jour disponible — installer…"
+                    if first:
+                        _log(f"mise à jour disponible : {sha[:7]}")
+                        _notify("Mise à jour disponible", "Menu 🎙 → Mise à jour disponible — installer…")
+                else:
+                    self._update_sha = None
+                    self.item_update.title = "Vérifier les mises à jour"
+                    if notify_if_none:
+                        _notify("LocalFlow", "Tu as la dernière version.")
+            _on_main(apply)
+        threading.Thread(target=work, daemon=True).start()
+
+    def _check_update_clicked(self, _item):
+        if self._update_sha:
+            update.launch()
+        else:
+            self._check_update(notify_if_none=True)
 
     def _toggle_item(self, title, key, extra=None):
         def cb(item):
