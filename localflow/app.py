@@ -57,6 +57,7 @@ LOG_PATH = os.path.expanduser("~/.localflow.log")
 LOCK_PATH = os.path.expanduser("~/.localflow.lock")
 BUSY_TIMEOUT_S = 90  # au-delà, on considère le pipeline coincé et on se débloque
 HEALTH_EVERY_S = 2
+MIC_LINGER_S = 90        # micro gardé ouvert après une dictée (enchaînements sans latence), puis fermé
 STALE_UI_S = 8       # overlay/icône restés bloqués sans enregistrement ni traitement
 
 try:
@@ -150,6 +151,7 @@ class LocalFlowApp(rumps.App):
         self.item_fast = self._toggle_item("Coller le direct (plus rapide)", "live_paste_fast")
         self.item_tone = self._toggle_item("Ton adapté à l'app", "tone_auto")
         self.item_sounds = self._toggle_item("Sons", "sounds_enabled")
+        self.item_mic = self._toggle_item("Micro toujours prêt (point orange permanent)", "mic_always_on", self._toggle_mic)
         self.item_engine = rumps.MenuItem("Moteur", callback=None)
         self._engine_items = {}
         for key, label in (("whisper", "Équilibré — Whisper turbo (~0,7 s)"),
@@ -180,6 +182,7 @@ class LocalFlowApp(rumps.App):
             self.item_fast,
             self.item_engine,
             self.item_sounds,
+            self.item_mic,
             None,
             self.item_tutorial,
             self.item_update,
@@ -201,7 +204,8 @@ class LocalFlowApp(rumps.App):
 
         # Santé : tap fn, UI bloquée, mains-libres trop long, fn coincé
         self._request_mic_permission()
-        self._open_mic()
+        if self.config.mic_always_on:
+            self._open_mic()
         self._health_timer = rumps.Timer(self._health_check, HEALTH_EVERY_S)
         self._health_timer.start()
         self._idle_since = time.time()
@@ -409,9 +413,6 @@ class LocalFlowApp(rumps.App):
 
     def _on_key(self, keycode):
         """Panneau ouvert : 1-4 copie une bulle, Esc ferme. Sinon on ne touche à rien."""
-        if self.tutorial.active and keycode == 53:  # Esc : étape suivante (jamais Entrée : l'ami tape peut-être)
-            self.tutorial.event("key")
-            return True
         if self.overlay.state != "expanded":
             return False
         if keycode == 53:  # Esc
@@ -477,8 +478,14 @@ class LocalFlowApp(rumps.App):
 
     def _health_check(self, _timer):
         try:
-            if not self.recorder.recording and not self.recorder.healthy():
-                self._open_mic()  # flux mort ou périphérique changé (AirPods…)
+            if not self.recorder.recording:
+                if self.config.mic_always_on:
+                    if not self.recorder.healthy():
+                        self._open_mic()  # flux mort ou périphérique changé (AirPods…)
+                elif self.recorder.open_:
+                    if time.time() - self.recorder.last_used > MIC_LINGER_S or not self.recorder.healthy():
+                        self.recorder.close()  # mode économe : on referme après inactivité
+                        _log("micro refermé (inactivité)")
             if not self._listener_ok:
                 self._start_listener()
             else:
@@ -707,6 +714,12 @@ class LocalFlowApp(rumps.App):
             _on_main(done)
 
     # ---------- menu ----------
+
+    def _toggle_mic(self, item):
+        if item.state:
+            self._open_mic()
+        else:
+            self.recorder.close()
 
     def _toggle_cleanup(self, item):
         if item.state:

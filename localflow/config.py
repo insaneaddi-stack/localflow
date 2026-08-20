@@ -14,6 +14,7 @@ DEFAULTS = {
     "tone_auto": True,           # adapter le ton à l'app active
     "engine": "whisper",         # "whisper" (précis) ou "parakeet" (rapide)
     "auto_update": True,         # mise à jour automatique en arrière-plan
+    "mic_always_on": False,      # micro ouvert en permanence (pré-roll permanent) ; sinon ouvert à la demande
     "history": [],               # [{"t": iso, "text": str, "app": str}], plus récent en premier
     "stats": {},                 # {"YYYY-MM-DD": {"words": n, "dictations": n, "audio_s": s}}
 }
@@ -62,6 +63,7 @@ class Config:
     live_paste_fast = _bool_prop("live_paste_fast")
     tone_auto = _bool_prop("tone_auto")
     auto_update = _bool_prop("auto_update")
+    mic_always_on = _bool_prop("mic_always_on")
 
     @property
     def engine(self):

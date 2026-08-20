@@ -17,7 +17,7 @@ import numpy as np
 import sounddevice as sd
 
 SAMPLE_RATE = 16000
-BLOCK = 800            # 50 ms
+BLOCK = 256            # 16 ms : premier son ~70 ms après l'ouverture
 RING_S = 1.5
 PREROLL_S = 0.35
 TARGET_RMS = 0.06
@@ -45,6 +45,7 @@ class Recorder:
         self._last_callback = 0.0
         self._hp_x = 0.0
         self._hp_y = 0.0
+        self.last_used = 0.0      # dernier stop() : sert à refermer le micro après inactivité
         self.live_queue = None
 
     # ---- flux permanent ----
@@ -142,9 +143,9 @@ class Recorder:
         return self._recording
 
     def start(self, live=False):
+        if self._stream is None:
+            self.open()          # micro fermé (mode économe) : ouverture à la demande
         with self._lock:
-            if self._stream is None:
-                raise RuntimeError("micro fermé")
             if self._recording:
                 return
             self.live_queue = queue.Queue() if live else None
@@ -165,6 +166,7 @@ class Recorder:
             if not self._recording:
                 return None
             self._recording = False
+            self.last_used = time.time()
             if self.live_queue is not None:
                 self.live_queue.put(None)
             chunks, self._chunks = self._chunks, []
@@ -175,6 +177,7 @@ class Recorder:
     def cancel(self):
         with self._lock:
             self._recording = False
+            self.last_used = time.time()
             if self.live_queue is not None:
                 self.live_queue.put(None)
             self._chunks = []
