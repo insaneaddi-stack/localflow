@@ -46,6 +46,7 @@ DOUBLE_TAP_S = 0.45      # deux taps rapprochés : ouvre/ferme le panneau
 TAIL_S = 0.35            # audio conservé après le relâchement (dernier mot)
 DEBUG_WAV = os.path.expanduser("~/Library/Caches/LocalFlow/last.wav")  # dernière dictée, pour diagnostiquer
 MIN_AUDIO_S = 0.35       # ignore les enregistrements plus courts
+MIN_VOICED_S = 0.30      # sans au moins 0,3 s de vraie voix, on ne transcrit pas (anti-hallucination)
 MAX_RECORD_S = 600       # mains-libres : arrêt auto après 10 min
 LIVE_JOIN_S = 15         # attente max du thread « direct » en fin de dictée
 
@@ -623,12 +624,18 @@ class LocalFlowApp(rumps.App):
             self.overlay.hide()
             self.title = ICON_IDLE
             return
-        _log(f"audio {len(audio)/SAMPLE_RATE:.2f}s (gain {self.recorder.gain_db:+.0f} dB) → transcription")
+        voiced = self.recorder.voiced_s
+        if voiced < MIN_VOICED_S:
+            _log(f"audio {len(audio)/SAMPLE_RATE:.2f}s mais {voiced:.2f}s de voix (bruit {20*np.log10(self.recorder.noise_floor+1e-9):.0f} dBFS) → rien entendu, ignoré")
+            self.overlay.hide()
+            self.title = ICON_IDLE
+            return
+        _log(f"audio {len(audio)/SAMPLE_RATE:.2f}s (voix {voiced:.1f}s, gain {self.recorder.gain_db:+.0f} dB) → transcription")
         self.title = ICON_PROCESSING
         self.overlay.show("processing")
         self._busy = True
         self._busy_since = time.time()
-        self._jobs.put(("audio", {"audio": audio, "live": self._live, "app": self._ctx_app}))
+        self._jobs.put(("audio", {"audio": audio, "live": self._live, "app": self._ctx_app, "voiced": voiced}))
         self._live = None
 
     # ---------- pipeline ----------
@@ -652,6 +659,7 @@ class LocalFlowApp(rumps.App):
 
     def _process(self, job):
         audio, live, (bundle, app_name) = job["audio"], job["live"], job["app"]
+        voiced = job.get("voiced", len(audio) / SAMPLE_RATE)
         self._save_debug(audio)
         try:
             t0 = time.time()
@@ -663,6 +671,9 @@ class LocalFlowApp(rumps.App):
                 text = self.transcriber.transcribe(audio, prompt=self._asr_prompt())
                 source = self.transcriber.name
 
+            if text and len(text.split()) > max(6, voiced * 5.0):
+                _log(f"rejeté : {len(text.split())} mots pour {voiced:.1f}s de voix (hallucination probable)")
+                text = ""
             text = self.learner.apply(self.dictionary.apply(text))
             learn = parse_learn_command(text)
             if learn:

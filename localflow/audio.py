@@ -25,6 +25,9 @@ MAX_GAIN = 25.0
 NOISE_FLOOR = 0.002
 ATTACK = 0.6
 RELEASE = 0.08
+VAD_MIN_ABS = 0.0012   # ≈ -58 dBFS dans la bande voix : en dessous, jamais de la voix (AVANT le gain)
+VAD_FLOOR_RATIO = 2.5  # voix = au moins 2,5× le bruit ambiant (dans la bande voix)
+_VAD_BINS = slice(4, 57)  # FFT 256 pts @16 kHz : 62,5 Hz/bin → 250–3500 Hz
 
 _HP_ALPHA = 1.0 / (1.0 + 2 * np.pi * 80.0 / SAMPLE_RATE)  # passe-haut 80 Hz, 1er ordre
 
@@ -46,6 +49,9 @@ class Recorder:
         self._hp_x = 0.0
         self._hp_y = 0.0
         self.last_used = 0.0      # dernier stop() : sert à refermer le micro après inactivité
+        self._floor_hist = []     # RMS bruts récents (pour estimer le bruit ambiant)
+        self.noise_floor = 0.002
+        self.voiced_s = 0.0       # secondes de vraie parole dans l'enregistrement courant
         self.live_queue = None
 
     # ---- flux permanent ----
@@ -107,6 +113,16 @@ class Recorder:
         self._hp_x, self._hp_y = px, py
         mono = y
         rms = float(np.sqrt(np.mean(mono ** 2)) + 1e-9)
+        # --- détection de voix sur le signal BRUT (avant gain), bande 250–3500 Hz ---
+        spec = np.abs(np.fft.rfft(mono[:256] * np.hanning(min(256, len(mono)))))
+        vrms = float(np.sqrt(np.mean(spec[_VAD_BINS] ** 2)) / 64.0 + 1e-9)
+        self._floor_hist.append(vrms)
+        if len(self._floor_hist) > 200:          # ≈ 3 s de blocs de 16 ms
+            self._floor_hist.pop(0)
+        if len(self._floor_hist) >= 20:
+            self.noise_floor = float(np.percentile(self._floor_hist, 20))
+        if self._recording and vrms > max(VAD_MIN_ABS, self.noise_floor * VAD_FLOOR_RATIO):
+            self.voiced_s += len(mono) / SAMPLE_RATE
         if rms > NOISE_FLOOR:
             wanted = min(MAX_GAIN, max(1.0, TARGET_RMS / rms))
             speed = ATTACK if wanted < self._gain else RELEASE
@@ -150,6 +166,7 @@ class Recorder:
                 return
             self.live_queue = queue.Queue() if live else None
             self._chunks = [self._preroll()]
+            self.voiced_s = 0.0
             self._recording = True
 
     @property
