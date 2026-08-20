@@ -4,7 +4,9 @@
 #   ./setup.sh --minimal  sans Qwen (nettoyage IA) ni Parakeet : ~1,6 Go au lieu de ~4,8 Go
 set -euo pipefail
 cd "$(dirname "$0")"
-MINIMAL=0; [ "${1:-}" = "--minimal" ] && MINIMAL=1
+MINIMAL=0; ONLY=""
+for a in "$@"; do case "$a" in --minimal) MINIMAL=1;; --only-*) ONLY="${a#--only-}";; esac; done
+want() { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
 
 if [ "$(uname -s)" != "Darwin" ] || [ "$(uname -m)" != "arm64" ]; then
   echo "❌ LocalFlow nécessite un Mac Apple Silicon (M1 ou plus récent)." >&2; exit 1
@@ -24,7 +26,7 @@ find_python() {
   return 1
 }
 
-if [ ! -x .venv/bin/python ]; then
+if want python && [ ! -x .venv/bin/python ]; then
   if PYTHON="$(find_python)"; then
     echo "==> Python trouvé : $PYTHON"; "$PYTHON" -m venv .venv
   else
@@ -37,23 +39,29 @@ if [ ! -x .venv/bin/python ]; then
   fi
 fi
 
-echo "==> Dépendances Python…"
-.venv/bin/python -m pip install --upgrade pip -q
-.venv/bin/python -m pip install -r requirements.txt -q
-
-echo "==> Modèle Whisper large-v3-turbo (~1,6 Go, une seule fois)…"
-.venv/bin/python -c "import mlx_whisper, numpy as np; mlx_whisper.transcribe(np.zeros(16000, dtype=np.float32), path_or_hf_repo='mlx-community/whisper-large-v3-turbo', language='fr')" >/dev/null
-if [ "$MINIMAL" = 0 ]; then
+if want python; then
+  echo "==> Dépendances Python…"
+  .venv/bin/python -m pip install --upgrade pip -q
+  .venv/bin/python -m pip install -r requirements.txt -q
+fi
+if want whisper; then
+  echo "==> Modèle Whisper large-v3-turbo (~1,6 Go, une seule fois)…"
+  .venv/bin/python -c "import mlx_whisper, numpy as np; mlx_whisper.transcribe(np.zeros(16000, dtype=np.float32), path_or_hf_repo='mlx-community/whisper-large-v3-turbo', language='fr')" >/dev/null
+fi
+if want qwen && [ "$MINIMAL" = 0 ]; then
   echo "==> Modèle Qwen3-1.7B 4-bit pour le nettoyage IA (~1 Go)…"
   .venv/bin/python -c "from mlx_lm import load; load('mlx-community/Qwen3-1.7B-4bit')" >/dev/null
 fi
-
-echo "==> Bundle LocalFlow.app…"
-./build-app.sh
-echo "==> Touche Globe 🌐 → « Ne rien faire » (sinon macOS ouvre les emoji à chaque dictée)…"
-defaults write com.apple.HIToolbox AppleFnUsageType -int 0 || true
-echo "==> Agent de session…"
-./install-agent.sh
+if want app; then
+  echo "==> Bundle LocalFlow.app…"
+  ./build-app.sh
+  echo "==> Touche Globe 🌐 → « Ne rien faire » (sinon macOS ouvre les emoji à chaque dictée)…"
+  defaults write com.apple.HIToolbox AppleFnUsageType -int 0 || true
+  echo "==> Agent de session…"
+  ./install-agent.sh
+fi
+[ -n "$ONLY" ] && exit 0
+[ "${LOCALFLOW_WIZARD:-0}" = 1 ] && exit 0
 
 cat <<'MSG'
 
