@@ -68,8 +68,16 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>LSMinimumSystemVersion</key><string>14.0</string>
 </dict></plist>
 PLIST
-codesign --force --deep --sign - --identifier com.louqui.localflow "$APP"
+# Signature : identité locale stable si elle existe (./sign-identity.sh), sinon ad hoc.
+IDENTITY="-"
+if security find-identity -v -p codesigning 2>/dev/null | grep -q '"LocalFlow Signing"'; then IDENTITY="LocalFlow Signing"; fi
+[ -f "$APP/Contents/Helpers/audiotap" ] && codesign --force --sign "$IDENTITY" --identifier com.louqui.localflow.audiotap "$APP/Contents/Helpers/audiotap" 2>/dev/null
+codesign --force --deep --sign "$IDENTITY" --identifier com.louqui.localflow "$APP"
 codesign --verify --deep --strict "$APP"
+echo "signé avec : $([ "$IDENTITY" = "-" ] && echo "ad hoc (Accessibilité à redonner après chaque rebuild — lance ./sign-identity.sh)" || echo "$IDENTITY (identité stable)")"
+# Empreinte des entrées du bundle : update.sh ne reconstruit que si elle change (sinon l'identité TCC est préservée).
+build_hash() { { cat build-app.sh assets/LocalFlow.icns helpers/audiotap/audiotap 2>/dev/null; echo "$PY $IDENTITY"; } | shasum -a 256 | cut -c1-16; }
+build_hash > "$APP/Contents/.build-hash"
 
 # Le binaire copié doit retrouver libpython : test réel, avec le même environnement que l'agent.
 . ./env.sh

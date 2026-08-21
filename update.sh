@@ -35,7 +35,16 @@ chmod +x "$ROOT"/*.sh
 
 # 4. dépendances si requirements.txt a changé (sinon instantané), bundle reconstruit ET testé
 LOCALFLOW_WIZARD=1 ./setup.sh --only-python || { restore; fail "dépendances"; }
-./build-app.sh || { restore; fail "construction du bundle"; }
+# Bundle reconstruit SEULEMENT si ses entrées ont changé : un bundle intact garde ses autorisations macOS.
+IDENTITY="-"; security find-identity -v -p codesigning 2>/dev/null | grep -q '"LocalFlow Signing"' && IDENTITY="LocalFlow Signing"
+PYX="$(.venv/bin/python -c 'import os,sys; print(os.path.realpath(sys.executable))')"
+BIN_DIR="$(dirname "$PYX")"; CAND="$BIN_DIR/../Resources/Python.app/Contents/MacOS/Python"; [ -x "$CAND" ] && PYX="$CAND"
+NEW_HASH="$({ cat build-app.sh assets/LocalFlow.icns helpers/audiotap/audiotap 2>/dev/null; echo "$PYX $IDENTITY"; } | shasum -a 256 | cut -c1-16)"
+if [ "$NEW_HASH" = "$(cat LocalFlow.app/Contents/.build-hash 2>/dev/null)" ] && codesign --verify --deep --strict LocalFlow.app 2>/dev/null; then
+  echo "bundle inchangé : pas de reconstruction (autorisations conservées)"
+else
+  ./build-app.sh || { restore; fail "construction du bundle"; }
+fi
 echo "$SHA" > .installed-sha
 echo "$SHA" > .updated-flag
 rm -rf "$TMP" "$BK"

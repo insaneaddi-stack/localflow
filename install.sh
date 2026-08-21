@@ -224,15 +224,13 @@ else
   PYP="$DEST:$DEST/.venv/lib/python$PYV/site-packages"
   doctor() { PYTHONPATH="$PYP" "$DEST/LocalFlow.app/Contents/MacOS/LocalFlow" -m localflow.doctor "$1"; }
 fi
+say "   LocalFlow vient d'ouvrir une fenêtre $B Autorisations $N à l'écran : suis-la."
 say "$B Accessibilité$N  $(c $MUT)— pour écouter fn et coller le texte$N"
-say "   J'ouvre les Réglages et le dossier de l'app."
-say "   Glisse $B LocalFlow.app $N dans $B Accessibilité $N, active l'interrupteur."
-[ "$DEMO" = 1 ] || { open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility" 2>/dev/null; open -R "$DEST/LocalFlow.app" 2>/dev/null; }
-if wait_until wait 600 30 "J'attends… Réglages → Confidentialité → Accessibilité → + → LocalFlow.app" doctor accessibility; then
+say "   Clique $B Autoriser $N → « Ouvrir les Réglages » → active $B LocalFlow $N."
+if wait_until wait 600 30 "J'attends… (fenêtre Autorisations de LocalFlow, ou Réglages → Accessibilité → LocalFlow)" doctor accessibility; then
   ok "Accessibilité accordée"; orb_frame 0 happy; sleep 0.6
 else ko "Pas d'autorisation après 10 min. Relance la commande quand tu veux, tout est conservé."; exit 1; fi
-say "$B Micro$N  $(c $MUT)— clique OK sur « LocalFlow souhaite accéder au micro »$N"
-[ "$DEMO" = 1 ] || launchctl kickstart -k "gui/$(id -u)/com.louqui.localflow" 2>/dev/null
+say "$B Micro$N  $(c $MUT)— clique Autoriser, puis OK sur « LocalFlow souhaite accéder au micro »$N"
 [ "$DEMO" = 1 ] && DEMO_N=0
 if wait_until wait 300 20 "Pas de fenêtre ? Réglages → Confidentialité → Micro → LocalFlow." doctor microphone; then
   ok "Micro accordé"

@@ -13,9 +13,7 @@ curl -fsSL https://raw.githubusercontent.com/insaneaddi-stack/localflow/main/ins
 Sans git ni Homebrew : s'il n'y a pas de Python 3.10+, `uv` en installe un tout seul.
 Version légère (sans nettoyage IA, ~1,6 Go) : ajoute `-s -- --minimal` à la fin de la commande.
 
-**Une fois, à la fin de l'installation** (les Réglages s'ouvrent tout seuls) :
-1. Confidentialité et sécurité → **Accessibilité** → `+` → `LocalFlow.app` (dans `~/Applications/LocalFlow`) → activer.
-2. Accepter la demande **Micro** au premier appui sur `fn`.
+**Une fois, à la fin de l'installation**, LocalFlow affiche une fenêtre **Autorisations** : clique *Autoriser* pour l'Accessibilité (active l'interrupteur dans les Réglages qui s'ouvrent) puis pour le Micro. La fenêtre se ferme toute seule quand c'est fait. L'app est signée avec un certificat local stable (`sign-identity.sh`, créé à l'installation — macOS demande ton mot de passe une fois) : les autorisations survivent aux mises à jour.
 
 Prérequis : Mac Apple Silicon (M1+), macOS 14+, 16 Go de RAM conseillés.
 

@@ -81,6 +81,10 @@ if want qwen && [ "$MINIMAL" = 0 ]; then
   fi
 fi
 if want app; then
+  if [ "${LOCALFLOW_NO_IDENTITY:-0}" != 1 ]; then
+    echo "==> Identité de signature locale (autorisations accordées une fois pour toutes)…"
+    ./sign-identity.sh || true
+  fi
   echo "==> Bundle LocalFlow.app…"
   ./build-app.sh
   echo "==> Touche Globe 🌐 → « Ne rien faire » (sinon macOS ouvre les emoji à chaque dictée)…"

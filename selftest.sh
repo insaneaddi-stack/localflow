@@ -56,7 +56,9 @@ from localflow.config import Config
 m=Meeting('t',title='T'); m.segments=[{'t0':1,'t1':2,'who':'me','text':'a'}]
 lw=LiveMeetingWindow.alloc().initWithCallbacks_({'stop':lambda:None,'cancel':lambda:None,'notes':lambda t:None}); lw._build(); lw.meeting=m; lw.window.orderFront_(None); lw.refresh(); lw.close()
 mw=MeetingsWindow.alloc().initWithIndex_callbacks_(MeetingIndex(),{'ask':lambda e,q:'','delete':lambda e:None,'notify':lambda a,b:None,'folder':lambda:'/tmp'}); mw._build(); mw.refresh()
-hw=HistoryWindow.alloc().initWithConfig_notify_(Config(), lambda a,b:None); hw._build(); hw.refresh()"
+hw=HistoryWindow.alloc().initWithConfig_notify_(Config(), lambda a,b:None); hw._build(); hw.refresh()
+from localflow.permissions import PermissionsWindow
+pw=PermissionsWindow.alloc().initWithIcon_('assets/icon_1024.png'); pw._build(); pw.refresh(); print('manquantes:', pw.missing())"
 if [ "$FULL" = 1 ]; then
 NAME="Whisper : transcription réelle"; t env HF_HUB_OFFLINE=1 $PY -c "
 import numpy as np, subprocess, wave, os

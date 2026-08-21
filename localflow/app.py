@@ -38,6 +38,7 @@ from . import sysaudio
 from . import update
 from .tutorial import Tutorial
 from .overlay import Overlay
+from .permissions import PermissionsWindow
 from .paste import copy_text, paste_text, press_undo, type_text
 
 ICON_LOADING = "⏳"
@@ -174,6 +175,7 @@ class LocalFlowApp(rumps.App):
         self.item_dict = rumps.MenuItem("Dictionnaire…", callback=self._open_dictionary)
         self.item_update = rumps.MenuItem("Vérifier les mises à jour", callback=self._check_update_clicked)
         self.item_tutorial = rumps.MenuItem("Revoir le tutoriel", callback=lambda _i: self.tutorial.show())
+        self.item_perms = rumps.MenuItem("Autorisations…", callback=lambda _i: self.perms.show())
         self.item_auto_update = self._toggle_item("Mises à jour automatiques", "auto_update")
 
         # ---- réunions ----
@@ -219,6 +221,7 @@ class LocalFlowApp(rumps.App):
             self.item_sounds,
             self.item_mic,
             None,
+            self.item_perms,
             self.item_tutorial,
             self.item_update,
             self.item_auto_update,
@@ -227,6 +230,7 @@ class LocalFlowApp(rumps.App):
         self._refresh_stats()
 
         self.history_window = HistoryWindow.alloc().initWithConfig_notify_(self.config, _notify)
+        self.perms = PermissionsWindow.alloc().initWithIcon_(ICON_PATH)
         self.tutorial = Tutorial(self.config)
         self.overlay = Overlay(self._overlay_level, self._panel_data, self._panel_action)
         self.overlay.meeting_info = self._meeting_info
@@ -363,7 +367,10 @@ class LocalFlowApp(rumps.App):
         def ready():
             self.title = self._idle_icon()
             self.item_status.title = "Prêt — maintenir fn, ou fn+espace"
-            if not self.config.data.get("onboarded"):
+            first = not self.config.data.get("onboarded")
+            if self.perms.missing():
+                self.perms.show(on_done=(self.tutorial.show if first else None))
+            elif first:
                 self.tutorial.show()
 
         _on_main(ready)
@@ -507,16 +514,9 @@ class LocalFlowApp(rumps.App):
             self.item_status.title = "⚠️ Autorisation Accessibilité manquante"
             if not getattr(self, "_perm_prompted", False):  # une seule fois, pas toutes les 2 s
                 self._perm_prompted = True
-                # Demande officielle : macOS affiche « LocalFlow souhaite contrôler cet ordinateur » et crée
-                # lui-même l'entrée Accessibilité (une entrée ajoutée à la main peut rester périmée après un rebuild).
-                try:
-                    import ApplicationServices as AS
-                    AS.AXIsProcessTrustedWithOptions({AS.kAXTrustedCheckOptionPrompt: True})
-                except Exception as exc:
-                    _log(f"AXIsProcessTrustedWithOptions indisponible : {exc}")
-                    _notify("Autorisation requise", "Ajoute LocalFlow dans Accessibilité.")
-                    subprocess.Popen(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"],
-                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                # Fenêtre guidée : témoins en direct + bouton qui déclenche la demande officielle de macOS
+                # (qui crée elle-même l'entrée Accessibilité ; une entrée ajoutée à la main peut rester périmée).
+                self.perms.show()
 
     def _request_mic_permission(self):
         """Déclenche explicitement la demande macOS « LocalFlow souhaite accéder au micro »."""
