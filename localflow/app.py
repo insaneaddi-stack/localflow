@@ -30,6 +30,11 @@ from .dictionary import DICT_PATH, Dictionary
 from .history_window import HistoryWindow
 from .hotkey import FnListener
 from .learning import Learner, parse_learn_command
+from .meeting import DEFAULT_FOLDER, MeetingIndex, MeetingRecorder, write_markdown, _fmt_ts
+from .meeting_detect import MeetingDetector
+from .meeting_window import LiveMeetingWindow, MeetingsWindow
+from .summarize import MODELS as SUMMARY_MODELS, Summarizer
+from . import sysaudio
 from . import update
 from .tutorial import Tutorial
 from .overlay import Overlay
@@ -40,6 +45,8 @@ ICON_IDLE = "🎙"
 ICON_RECORDING = "🔴"
 ICON_HANDS_FREE = "🔴∞"
 ICON_PROCESSING = "💭"
+ICON_MEETING = "🎙●"
+OFFER_TIMEOUT_S = 25     # la proposition « enregistrer la réunion ? » disparaît toute seule
 
 TAP_MAX_S = 0.3          # en dessous : c'est un tap, pas un push-to-talk
 DOUBLE_TAP_S = 0.45      # deux taps rapprochés : ouvre/ferme le panneau
@@ -58,7 +65,7 @@ LOG_PATH = os.path.expanduser("~/.localflow.log")
 LOCK_PATH = os.path.expanduser("~/.localflow.lock")
 BUSY_TIMEOUT_S = 90  # au-delà, on considère le pipeline coincé et on se débloque
 HEALTH_EVERY_S = 2
-MIC_LINGER_S = 90        # micro gardé ouvert après une dictée (enchaînements sans latence), puis fermé
+MIC_LINGER_S = 15        # micro gardé ouvert après une dictée (enchaînements sans latence), puis fermé
 STALE_UI_S = 8       # overlay/icône restés bloqués sans enregistrement ni traitement
 
 try:
@@ -169,6 +176,32 @@ class LocalFlowApp(rumps.App):
         self.item_tutorial = rumps.MenuItem("Revoir le tutoriel", callback=lambda _i: self.tutorial.show())
         self.item_auto_update = self._toggle_item("Mises à jour automatiques", "auto_update")
 
+        # ---- réunions ----
+        self.item_meet = rumps.MenuItem("Réunions", callback=None)
+        self.item_meet_start = rumps.MenuItem("Démarrer une réunion", callback=self._meeting_toggle_clicked)
+        self.item_meet_window = rumps.MenuItem("Mes réunions…", callback=lambda _i: self.meetings_window.show())
+        self.item_meet_folder = rumps.MenuItem("Ouvrir le dossier", callback=lambda _i: subprocess.Popen(["open", self._meeting_folder()]))
+        self.item_meet_detect = self._toggle_item("Proposer quand un appel démarre", "meeting_auto_detect")
+        self.item_meet_audio = self._toggle_item("Garder l'audio (.m4a)", "meeting_keep_audio")
+        self.item_meet_model = rumps.MenuItem("Qualité du résumé", callback=None)
+        self._summary_items = {}
+        for key, label in (("qwen-1.7b", "Standard — Qwen3 1.7B (déjà installé)"),
+                           ("qwen-4b", "Meilleur — Qwen3 4B (~2,5 Go, téléchargé à la demande)")):
+            it = rumps.MenuItem(label, callback=lambda item, k=key: self._set_summary_model(k))
+            it.state = self.config.meeting_summary_model == key
+            self._summary_items[key] = it
+            self.item_meet_model.add(it)
+        self.item_meet_lang = rumps.MenuItem("Langue des réunions", callback=None)
+        self._lang_items = {}
+        for key, label in (("fr", "Français"), ("en", "Anglais"), ("", "Automatique (par tour de parole)")):
+            it = rumps.MenuItem(label, callback=lambda item, k=key: self._set_meeting_lang(k))
+            it.state = self.config.meeting_language == key
+            self._lang_items[key] = it
+            self.item_meet_lang.add(it)
+        for it in (self.item_meet_start, self.item_meet_window, self.item_meet_folder, None, self.item_meet_detect,
+                   self.item_meet_audio, self.item_meet_model, self.item_meet_lang):
+            self.item_meet.add(it) if it is not None else self.item_meet.add(rumps.separator)
+
         self.menu = [
             self.item_status,
             self.item_stats,
@@ -176,6 +209,7 @@ class LocalFlowApp(rumps.App):
             self.item_panel,
             self.item_history,
             self.item_dict,
+            self.item_meet,
             None,
             self.item_cleanup,
             self.item_tone,
@@ -194,11 +228,33 @@ class LocalFlowApp(rumps.App):
 
         self.history_window = HistoryWindow.alloc().initWithConfig_notify_(self.config, _notify)
         self.tutorial = Tutorial(self.config)
-        self.overlay = Overlay(lambda: self.recorder.level, self._panel_data, self._panel_action)
+        self.overlay = Overlay(self._overlay_level, self._panel_data, self._panel_action)
+        self.overlay.meeting_info = self._meeting_info
+
+        # Réunions : enregistreur (micro + son système), résumé, index, détection, fenêtres
+        self.model_lock = threading.Lock()   # Whisper partagé entre dictée et réunion
+        self.meeting_rec = MeetingRecorder(self._meeting_transcribe, self.model_lock, _log, prompt=self._asr_prompt,
+                                           on_segment=lambda seg: _on_main(self.live_window.refresh),
+                                           on_error=lambda msg: _notify("Réunion", msg),
+                                           language=self.config.meeting_language)
+        self.summarizer = Summarizer(self.config.meeting_summary_model, _log, shared=self.cleaner)
+        self.meeting_index = MeetingIndex()
+        self.detector = MeetingDetector()
+        self._offer_t0 = 0.0
+        self._offer_app = ""
+        self._offer_bundle = ""
+        self._meeting_busy = False
+        self.live_window = LiveMeetingWindow.alloc().initWithCallbacks_({
+            "stop": self._meeting_stop, "cancel": self._meeting_cancel, "notes": self.meeting_rec.set_notes})
+        self.meetings_window = MeetingsWindow.alloc().initWithIndex_callbacks_(self.meeting_index, {
+            "ask": self._meeting_ask, "delete": self._meeting_delete, "notify": _notify, "folder": self._meeting_folder})
+        self._meeting_log_status()
         self._last_tap = 0.0
         self._finishing = False
+        # Le tap tourne sur son propre thread : on renvoie chaque callback sur le thread principal.
         self.listener = FnListener(
-            self._on_fn_down, self._on_fn_up, self._on_fn_space, self._on_fn_other, self._on_key
+            lambda: _on_main(self._on_fn_down), lambda: _on_main(self._on_fn_up),
+            lambda: _on_main(self._on_fn_space), lambda: _on_main(self._on_fn_other), self._on_key,
         )
         self._listener_ok = False
         self._start_listener()
@@ -305,7 +361,7 @@ class LocalFlowApp(rumps.App):
                 delay = min(delay * 2, 60)
 
         def ready():
-            self.title = ICON_IDLE
+            self.title = self._idle_icon()
             self.item_status.title = "Prêt — maintenir fn, ou fn+espace"
             if not self.config.data.get("onboarded"):
                 self.tutorial.show()
@@ -413,17 +469,20 @@ class LocalFlowApp(rumps.App):
         self.tutorial.event("handsfree")
 
     def _on_key(self, keycode):
-        """Panneau ouvert : 1-4 copie une bulle, Esc ferme. Sinon on ne touche à rien."""
+        """Panneau ouvert : 1-4 copie une bulle, Esc ferme. Sinon on ne touche à rien.
+        Appelé depuis le thread du tap : décision immédiate, action sur le thread principal."""
         if self.overlay.state != "expanded":
             return False
         if keycode == 53:  # Esc
-            self.overlay.hide()
+            _on_main(self.overlay.hide)
             return True
         idx = {18: 0, 19: 1, 20: 2, 21: 3}.get(keycode)  # touches 1-4 (position physique)
         if idx is not None:
-            tiles = self._panel_data().get("tiles", [])
-            if idx < len(tiles):
-                self.overlay._action(tiles[idx]["action"], tiles[idx].get("payload"))
+            def act():
+                tiles = self._panel_data().get("tiles", [])
+                if idx < len(tiles):
+                    self.overlay._action(tiles[idx]["action"], tiles[idx].get("payload"))
+            _on_main(act)
             return True
         return False
 
@@ -448,9 +507,16 @@ class LocalFlowApp(rumps.App):
             self.item_status.title = "⚠️ Autorisation Accessibilité manquante"
             if not getattr(self, "_perm_prompted", False):  # une seule fois, pas toutes les 2 s
                 self._perm_prompted = True
-                _notify("Autorisation requise", "Ajoute LocalFlow/Python dans Accessibilité et Surveillance de l'entrée.")
-                subprocess.Popen(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"],
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                # Demande officielle : macOS affiche « LocalFlow souhaite contrôler cet ordinateur » et crée
+                # lui-même l'entrée Accessibilité (une entrée ajoutée à la main peut rester périmée après un rebuild).
+                try:
+                    import ApplicationServices as AS
+                    AS.AXIsProcessTrustedWithOptions({AS.kAXTrustedCheckOptionPrompt: True})
+                except Exception as exc:
+                    _log(f"AXIsProcessTrustedWithOptions indisponible : {exc}")
+                    _notify("Autorisation requise", "Ajoute LocalFlow dans Accessibilité.")
+                    subprocess.Popen(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def _request_mic_permission(self):
         """Déclenche explicitement la demande macOS « LocalFlow souhaite accéder au micro »."""
@@ -494,6 +560,14 @@ class LocalFlowApp(rumps.App):
                 if state:
                     _log(f"santé: event tap {state}")
 
+            if self.recorder.stalled() and time.time() - self._record_start > 2.0:
+                _log("santé: micro coupé pendant la dictée (périphérique parti ?) → annulation, réouverture")
+                self.hands_free = False
+                self._suppress_next_release = True
+                self._cancel_recording()
+                _notify("Micro coupé", "Le micro a disparu pendant la dictée (AirPods ?). Réessaie, il est rouvert.")
+                self._open_mic()
+
             if self.hands_free and self.recorder.recording:
                 if time.time() - self._record_start > MAX_RECORD_S:
                     _log("mains-libres: limite de durée atteinte, arrêt auto")
@@ -504,19 +578,21 @@ class LocalFlowApp(rumps.App):
                 _log("santé: pipeline coincé, déblocage forcé")
                 self._busy = False
                 self.overlay.hide()
-                self.title = ICON_IDLE
+                self.title = self._idle_icon()
+
+            self._meeting_health()
 
             active = self.recorder.recording or self._busy
             if active:
                 self._idle_since = time.time()
-            elif self.transcriber is not None and self.title != ICON_IDLE \
+            elif self.transcriber is not None and self.title != self._idle_icon() \
                     and time.time() - self._idle_since > STALE_UI_S:
                 _log("santé: UI bloquée, remise à zéro")
                 self.hands_free = False
                 self._suppress_next_release = False
                 self.listener.release()
                 self.overlay.hide()
-                self.title = ICON_IDLE
+                self.title = self._idle_icon()
         except Exception:
             _log("erreur health_check:\n" + traceback.format_exc())
 
@@ -601,7 +677,7 @@ class LocalFlowApp(rumps.App):
             self._live.abort = True
         self.recorder.cancel()
         self.overlay.hide()
-        self.title = ICON_IDLE
+        self.title = self._idle_icon()
 
     def _finish_recording(self):
         """Laisse TAIL_S d'audio après le relâchement (le dernier mot n'est pas coupé)."""
@@ -622,13 +698,13 @@ class LocalFlowApp(rumps.App):
             if self._live is not None:
                 self._live.abort = True
             self.overlay.hide()
-            self.title = ICON_IDLE
+            self.title = self._idle_icon()
             return
         voiced = self.recorder.voiced_s
         if voiced < MIN_VOICED_S:
             _log(f"audio {len(audio)/SAMPLE_RATE:.2f}s mais {voiced:.2f}s de voix (bruit {20*np.log10(self.recorder.noise_floor+1e-9):.0f} dBFS) → rien entendu, ignoré")
             self.overlay.hide()
-            self.title = ICON_IDLE
+            self.title = self._idle_icon()
             return
         _log(f"audio {len(audio)/SAMPLE_RATE:.2f}s (voix {voiced:.1f}s, gain {self.recorder.gain_db:+.0f} dB) → transcription")
         self.title = ICON_PROCESSING
@@ -668,7 +744,8 @@ class LocalFlowApp(rumps.App):
                 text = live.text
                 source = "direct"
             else:
-                text = self.transcriber.transcribe(audio, prompt=self._asr_prompt())
+                with self.model_lock:
+                    text = self.transcriber.transcribe(audio, prompt=self._asr_prompt())
                 source = self.transcriber.name
 
             seconds = len(audio) / SAMPLE_RATE
@@ -721,7 +798,7 @@ class LocalFlowApp(rumps.App):
 
             def done():
                 self.overlay.hide()
-                self.title = ICON_IDLE
+                self.title = self._idle_icon()
 
             _on_main(done)
 
@@ -772,8 +849,10 @@ class LocalFlowApp(rumps.App):
                  "on": True, "action": "history"},
                 {"title": "Nettoyage IA", "subtitle": "Activé · +1 s" if self.config.cleanup_enabled else "Désactivé · instantané",
                  "color": (0.35, 0.95, 0.55), "on": self.config.cleanup_enabled, "action": "toggle", "payload": "cleanup_enabled"},
-                {"title": "Sons", "subtitle": "Activés" if self.config.sounds_enabled else "Silencieux",
-                 "color": (1.00, 0.62, 0.30), "on": self.config.sounds_enabled, "action": "toggle", "payload": "sounds_enabled"},
+                {"title": "Réunion", "subtitle": (f"■ Arrêter · {_fmt_ts(self.meeting_rec.meeting.duration_s)}" if self.meeting_rec.active
+                                                  else ("Résumé en cours…" if self._meeting_busy else "Enregistrer · micro + son système")),
+                 "color": (1.00, 0.30, 0.32) if self.meeting_rec.active else (1.00, 0.62, 0.30),
+                 "on": self.meeting_rec.active, "action": "meeting_toggle"},
                 {"title": "Copier", "subtitle": (last[:34] + "…" if len(last) > 34 else last) if last else "Aucune dictée",
                  "color": (0.35, 0.70, 1.00), "on": bool(last), "action": "copy_last"},
             ],
@@ -812,6 +891,18 @@ class LocalFlowApp(rumps.App):
         elif action == "history":
             self.overlay.hide()
             self.history_window.show()
+        elif action == "meeting_toggle":
+            self.overlay.hide()
+            self._meeting_toggle_clicked(None)
+        elif action == "meeting_accept":
+            app = self._offer_app
+            self._offer_app = ""
+            self.overlay.hide()
+            self._meeting_start(app=app)
+        elif action == "meeting_decline":
+            self.detector.decline(self._offer_bundle)
+            self._offer_app = ""
+            self.overlay.hide()
         elif action == "dict":
             self.overlay.hide()
             subprocess.Popen(["open", "-t", DICT_PATH])
@@ -821,6 +912,212 @@ class LocalFlowApp(rumps.App):
 
     def _open_dictionary(self, _item):
         subprocess.Popen(["open", "-t", DICT_PATH])
+
+    # ---------- réunions ----------
+
+    def _idle_icon(self):
+        return ICON_MEETING if self.meeting_rec.active else ICON_IDLE
+
+    def _overlay_level(self):
+        if self.recorder.recording:
+            return self.recorder.level
+        return self.meeting_rec.level if self.meeting_rec.active else 0.0
+
+    def _meeting_info(self):
+        m = self.meeting_rec.meeting
+        return {
+            "clock": _fmt_ts(m.duration_s) if (m and self.meeting_rec.active) else "00:00",
+            "sys_level": self.meeting_rec.sys_level if self.meeting_rec.active else 0.0,
+            "offer": f"Réunion {self._offer_app} détectée" if self._offer_app else "Réunion détectée",
+        }
+
+    def _meeting_folder(self):
+        f = self.config.meeting_folder or DEFAULT_FOLDER
+        try:
+            os.makedirs(f, exist_ok=True)
+        except OSError:
+            pass
+        return f
+
+    def _meeting_transcribe(self, audio, prompt, language=""):
+        if self.transcriber is None:
+            raise RuntimeError("moteur non chargé")
+        return self.transcriber.transcribe(audio, prompt=prompt, language=language)
+
+    def _meeting_log_status(self):
+        if not sysaudio.macos_ok():
+            _log("réunions : son système indisponible (macOS < 14.2) — micro seul")
+        elif sysaudio.helper_path() is None:
+            _log("réunions : helper audiotap introuvable — micro seul (relance ./setup.sh)")
+
+    def _set_summary_model(self, key):
+        self.config.meeting_summary_model = key
+        self.summarizer.set_model(key)
+        for k, it in self._summary_items.items():
+            it.state = k == key
+        if key == "qwen-4b":
+            _notify("Résumé", "Qwen3 4B (~2,5 Go) sera téléchargé à la fin de la prochaine réunion.")
+
+    def _set_meeting_lang(self, key):
+        self.config.meeting_language = key
+        self.meeting_rec.language = key
+        for k, it in self._lang_items.items():
+            it.state = k == key
+
+    def _meeting_health(self):
+        """Appelé toutes les 2 s : détection d'appel, expiration de la proposition, fin auto."""
+        rec = self.meeting_rec
+        if self.overlay.state == "meeting_offer" and time.time() - self._offer_t0 > OFFER_TIMEOUT_S:
+            self._offer_app = ""
+            self.overlay.hide()
+        if not self.config.meeting_auto_detect or self.transcriber is None:
+            return
+        ignore = self.recorder.open_ or rec.active   # notre propre micro rendrait « micro utilisé » toujours vrai
+        res = self.detector.poll(ignore_mic=ignore, recording=rec.active)
+        if res is None:
+            return
+        kind, name = res
+        if kind == "offer" and not rec.active and not self._meeting_busy and self.overlay.state in ("idle", "hover"):
+            self._offer_app = name
+            self._offer_bundle = self.detector.offered
+            self._offer_t0 = time.time()
+            self.overlay.offer_meeting()
+            _log(f"réunion détectée ({name}) : proposition affichée")
+        elif kind == "ended" and rec.active:
+            _log(f"réunion : {name} fermée → arrêt automatique")
+            _notify("Réunion terminée", f"{name} est fermée : je termine et je résume.")
+            self._meeting_stop()
+
+    def _meeting_toggle_clicked(self, _item):
+        if self.meeting_rec.active:
+            self._meeting_stop()
+        elif not self._meeting_busy:
+            self._meeting_start()
+
+    def _meeting_start(self, app=""):
+        if self.meeting_rec.active or self._meeting_busy:
+            return
+        if self.transcriber is None:
+            _notify("Réunion", "Le moteur de transcription n'est pas encore chargé.")
+            return
+        if not app:
+            from .meeting_detect import running_call_app, frontmost_browser
+            found = running_call_app() or frontmost_browser()
+            app = found[0] if found else ""
+        try:
+            m = self.meeting_rec.start(app=app)
+            self.detector.began(app)
+        except Exception as exc:
+            _log("réunion : démarrage impossible\n" + traceback.format_exc())
+            _notify("Réunion", f"Impossible de démarrer : {exc}")
+            return
+        self.item_meet_start.title = "■ Arrêter la réunion"
+        self.title = self._idle_icon()
+        self.overlay.set_meeting(True)
+        self.overlay.refresh()
+        self.live_window.show(m)
+        self._play(SOUND_START)
+        if self.meeting_rec.mic_error:
+            _notify("Réunion", "Micro indisponible : seul le son système est enregistré.")
+        if self.meeting_rec.tap_warning:
+            _notify("Réunion", self.meeting_rec.tap_warning)
+        self.tutorial.event("meeting")
+        threading.Timer(25, lambda: _on_main(self._meeting_check_tap)).start()
+
+    def _meeting_check_tap(self):
+        w = self.meeting_rec.tap_warning
+        if self.meeting_rec.active and w and "autorisation" in w:
+            _notify("Son système muet", "Réglages → Confidentialité → Enregistrement de l'écran et audio système → LocalFlow.")
+            subprocess.Popen(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_AudioCapture"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def _meeting_cancel(self):
+        if not self.meeting_rec.active:
+            return
+        self.meeting_rec.stop(wait_s=2)
+        self.meeting_rec.cleanup_cache(keep_as="last-cancelled")   # audio gardé pour diagnostiquer
+        self._meeting_reset_ui()
+        _log("réunion annulée")
+
+    def _meeting_reset_ui(self):
+        self.item_meet_start.title = "Démarrer une réunion"
+        self.overlay.set_meeting(False)
+        self.overlay.refresh()
+        self.title = self._idle_icon()
+        self.live_window.close()
+
+    def _meeting_stop(self):
+        rec = self.meeting_rec
+        if not rec.active or self._meeting_busy:
+            return
+        self._meeting_busy = True
+        self.item_meet_start.title = "Résumé en cours…"
+        self.live_window.set_busy(True, "Fin de la transcription, puis résumé… (quelques dizaines de secondes)")
+        self._play(SOUND_STOP)
+
+        def work():
+            m = None
+            try:
+                m = rec.stop()
+                _on_main(lambda: self.overlay.set_meeting(False))   # UI : thread principal uniquement
+                _on_main(lambda: self.live_window.set_busy(True, f"{len(m.segments)} tours transcrits · rédaction du compte rendu…"))
+                folder = self._meeting_folder()
+                summary = ""
+                if m.segments:
+                    try:
+                        summary = self.summarizer.summarize(m.plain_transcript(), notes=m.notes, vocab=self.dictionary.words)
+                    except Exception:
+                        _log("réunion : résumé impossible\n" + traceback.format_exc())
+                    try:
+                        m.title = self.summarizer.title(m.plain_transcript(), summary) or (m.app and f"Réunion {m.app}") or "Réunion"
+                    except Exception:
+                        m.title = (m.app and f"Réunion {m.app}") or "Réunion"
+                else:
+                    m.title = (m.app and f"Réunion {m.app}") or "Réunion"
+                m.summary = summary
+                path = write_markdown(m, folder)
+                if self.config.meeting_keep_audio and m.duration_s > 5:
+                    rec.export_audio(folder)
+                    write_markdown(m, folder)   # ré-écrit avec le lien audio
+                first = self.summarizer.first_line(summary) if summary else (m.plain_transcript()[:160] if m.segments else "")
+                self.meeting_index.add(m, first)
+                rec.cleanup_cache(keep_as="last")   # me.wav / them.wav de la dernière réunion (diagnostic)
+                _log(f"réunion enregistrée : {os.path.basename(path)}")
+
+                def done():
+                    self._meeting_busy = False
+                    self._meeting_reset_ui()
+                    self.meetings_window.current = None
+                    self.meetings_window.show()
+                    self.overlay.refresh()
+                _on_main(done)
+                _notify("Compte rendu prêt", m.title)
+            except Exception as exc:
+                _log("réunion : erreur de fin\n" + traceback.format_exc())
+                _notify("Réunion", f"Erreur en fin de réunion : {exc}. L'audio est dans ~/Library/Caches/LocalFlow/meetings.")
+
+                def fail():
+                    self._meeting_busy = False
+                    self._meeting_reset_ui()
+                _on_main(fail)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _meeting_ask(self, entry, question):
+        """Depuis un thread de la fenêtre Réunions."""
+        try:
+            with open(entry["path"], "r", encoding="utf-8") as f:
+                text = f.read()
+        except Exception:
+            return "Fichier introuvable."
+        summary, transcript = text, ""
+        if "## Transcript" in text:
+            summary, transcript = text.split("## Transcript", 1)
+        return self.summarizer.ask(question, transcript or text, summary)
+
+    def _meeting_delete(self, entry):
+        self.meeting_index.remove(entry.get("id"), delete_files=True)
+        _notify("Supprimée", entry.get("title", "Réunion"))
 
     def _play(self, sound):
         if self.config.sounds_enabled:

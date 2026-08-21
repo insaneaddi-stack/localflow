@@ -3,9 +3,15 @@
 Un event tap (plutôt que NSEvent monitors) permet d'AVALER fn+espace pour
 qu'aucun espace ne soit inséré dans l'app active, et de détecter fn+autre
 touche (fn+←, fn+⌫…) pour annuler un enregistrement déclenché par erreur.
-Nécessite l'autorisation Accessibilité. À démarrer depuis le thread principal.
+Nécessite l'autorisation Accessibilité.
+
+Le tap tourne sur SON PROPRE THREAD (run loop dédié) : même si le thread principal
+de l'app se fige (modèle, UI…), macOS reçoit la réponse du tap immédiatement et
+le clavier/trackpad ne sont jamais ralentis. Les callbacks sont donc appelés
+depuis ce thread : l'app les renvoie sur le thread principal.
 """
 
+import threading
 import traceback
 
 import Quartz
@@ -15,7 +21,7 @@ SPACE_KEYCODE = 49
 FLAG_FN = Quartz.kCGEventFlagMaskSecondaryFn
 
 class FnListener:
-    """Callbacks (tous appelés sur le thread principal) :
+    """Callbacks (appelés depuis le thread du tap — renvoyer sur le main thread) :
 
     - on_down()      : fn vient d'être enfoncé
     - on_up()        : fn vient d'être relâché
@@ -33,27 +39,51 @@ class FnListener:
         self._tap = None
         self._source = None
         self._cb = self._callback  # référence forte : PyObjC ne retient pas le callback
+        self._loop = None
+        self._thread = None
 
     def start(self):
-        mask = (1 << Quartz.kCGEventKeyDown) | (1 << Quartz.kCGEventFlagsChanged)
-        self._tap = Quartz.CGEventTapCreate(
-            Quartz.kCGSessionEventTap,
-            Quartz.kCGHeadInsertEventTap,
-            Quartz.kCGEventTapOptionDefault,
-            mask,
-            self._cb,
-            None,
-        )
+        """Crée le tap sur un thread dédié ; lève si l'autorisation manque."""
+        ready = threading.Event()
+        self._error = None
+        self._thread = threading.Thread(target=self._run, args=(ready,), daemon=True, name="fn-tap")
+        self._thread.start()
+        ready.wait(5.0)
+        if self._error is not None:
+            raise RuntimeError(self._error)
         if self._tap is None:
-            raise RuntimeError(
-                "Impossible de créer l'event tap : accorde l'autorisation "
-                "Accessibilité (Réglages Système → Confidentialité et sécurité)."
+            raise RuntimeError("event tap : démarrage trop lent")
+
+    def _run(self, ready):
+        try:
+            mask = (1 << Quartz.kCGEventKeyDown) | (1 << Quartz.kCGEventFlagsChanged)
+            tap = Quartz.CGEventTapCreate(
+                Quartz.kCGSessionEventTap,
+                Quartz.kCGHeadInsertEventTap,
+                Quartz.kCGEventTapOptionDefault,
+                mask,
+                self._cb,
+                None,
             )
-        self._source = Quartz.CFMachPortCreateRunLoopSource(None, self._tap, 0)
-        Quartz.CFRunLoopAddSource(
-            Quartz.CFRunLoopGetMain(), self._source, Quartz.kCFRunLoopCommonModes
-        )
-        Quartz.CGEventTapEnable(self._tap, True)
+            if tap is None:
+                self._error = ("Impossible de créer l'event tap : accorde l'autorisation "
+                               "Accessibilité (Réglages Système → Confidentialité et sécurité).")
+                ready.set()
+                return
+            source = Quartz.CFMachPortCreateRunLoopSource(None, tap, 0)
+            loop = Quartz.CFRunLoopGetCurrent()
+            Quartz.CFRunLoopAddSource(loop, source, Quartz.kCFRunLoopCommonModes)
+            Quartz.CGEventTapEnable(tap, True)
+            self._tap, self._source, self._loop = tap, source, loop
+            ready.set()
+            Quartz.CFRunLoopRun()   # jusqu'à stop()
+        except Exception as exc:
+            self._error = str(exc)
+            ready.set()
+        finally:
+            self._tap = None
+            self._source = None
+            self._loop = None
 
     def ensure_enabled(self):
         """À appeler périodiquement : macOS peut désactiver un tap (timeout,
@@ -81,16 +111,19 @@ class FnListener:
 
     def stop(self):
         try:
-            if self._source is not None:
-                Quartz.CFRunLoopRemoveSource(
-                    Quartz.CFRunLoopGetMain(), self._source, Quartz.kCFRunLoopCommonModes
-                )
             if self._tap is not None:
                 Quartz.CGEventTapEnable(self._tap, False)
+            if self._loop is not None:
+                Quartz.CFRunLoopStop(self._loop)
         except Exception:
             pass
+        t = self._thread
+        if t is not None and t.is_alive() and t is not threading.current_thread():
+            t.join(timeout=2.0)
         self._tap = None
         self._source = None
+        self._loop = None
+        self._thread = None
         self._pressed = False
 
     def release(self):

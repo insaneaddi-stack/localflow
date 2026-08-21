@@ -5,6 +5,16 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 APP=LocalFlow.app
+# JAMAIS toucher au bundle pendant qu'il tourne : macOS invalide le processus et son tap clavier
+# (clavier/trackpad qui ne répondent plus). On arrête d'abord, on relance à la fin.
+WAS_RUNNING=0
+if pgrep -f "LocalFlow.app/Contents/MacOS/LocalFlow" >/dev/null 2>&1; then
+  WAS_RUNNING=1
+  echo "LocalFlow tourne : arrêt le temps de reconstruire le bundle…"
+  launchctl bootout "gui/$(id -u)/com.louqui.localflow" 2>/dev/null || true
+  pkill -f "LocalFlow.app/Contents/MacOS/LocalFlow" 2>/dev/null || true
+  sleep 1
+fi
 
 REAL="$(.venv/bin/python -c 'import os,sys; print(os.path.realpath(sys.executable))')"
 BIN_DIR="$(dirname "$REAL")"
@@ -28,6 +38,17 @@ if [ "$STANDALONE" = 1 ]; then
     [ -f "$dylib" ] && cp "$dylib" "$APP/Contents/lib/" && echo "libpython copiée : $(basename "$dylib")"
   done
 fi
+# Helper de capture du son système (réunions). Recompilé si swiftc est là, sinon binaire prébuilt du dépôt.
+mkdir -p "$APP/Contents/Helpers"
+if command -v swiftc >/dev/null 2>&1 && xcode-select -p >/dev/null 2>&1; then
+  (cd helpers/audiotap && ./build.sh >/dev/null 2>&1) && echo "audiotap recompilé" || echo "audiotap : compilation impossible, binaire prébuilt utilisé"
+fi
+if [ -x helpers/audiotap/audiotap ]; then
+  cp helpers/audiotap/audiotap "$APP/Contents/Helpers/audiotap"
+  chmod 755 "$APP/Contents/Helpers/audiotap"
+else
+  echo "⚠️  helpers/audiotap/audiotap manquant : les réunions n'auront que le micro"
+fi
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -43,6 +64,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>LSUIElement</key><true/>
     <key>NSHighResolutionCapable</key><true/>
     <key>NSMicrophoneUsageDescription</key><string>LocalFlow écoute ta voix pour la dicter, 100 % en local.</string>
+    <key>NSAudioCaptureUsageDescription</key><string>LocalFlow enregistre le son de tes réunions (Zoom, Meet, Teams…) pour les transcrire, 100 % en local.</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
 </dict></plist>
 PLIST
@@ -56,3 +78,7 @@ if ! env -u DYLD_FALLBACK_LIBRARY_PATH "$APP/Contents/MacOS/LocalFlow" -c "impor
   echo "❌ Le bundle ne démarre pas :"; cat /tmp/localflow-build-test.log; exit 1
 fi
 echo "✅ $APP construit, signé et testé"
+if [ "$WAS_RUNNING" = 1 ] && [ "${LOCALFLOW_NO_RELAUNCH:-0}" != 1 ]; then
+  echo "Relance de LocalFlow… (macOS peut redemander Accessibilité / Micro : le bundle a changé)"
+  ./run.sh
+fi

@@ -39,8 +39,8 @@ class Transcriber:
 
         self.model = from_pretrained(MODEL_ID)
 
-    def transcribe(self, audio: np.ndarray, prompt: str = "") -> str:
-        """Transcrit un buffer float32 mono 16 kHz. Détection FR/EN automatique."""
+    def transcribe(self, audio: np.ndarray, prompt: str = "", language: str = "") -> str:
+        """Transcrit un buffer float32 mono 16 kHz. Détection de langue automatique (language ignoré)."""
         pcm = np.clip(np.asarray(audio, dtype=np.float32), -1.0, 1.0)
         key = f"{_MEM_PREFIX}{id(pcm)}-{threading.get_ident()}"
         with _buffers_lock:
@@ -244,10 +244,11 @@ class WhisperTranscriber:
             kept.append(txt)
         return " ".join(kept).strip()
 
-    def transcribe(self, audio: np.ndarray, prompt: str = "") -> str:
+    def transcribe(self, audio: np.ndarray, prompt: str = "", language: str = "") -> str:
+        """language : 'fr'/'en' pour figer la langue (réunions), sinon détection automatique."""
         pcm = np.clip(np.asarray(audio, dtype=np.float32), -1.0, 1.0)
         seconds = len(pcm) / SAMPLE_RATE
-        lang = self.detect_language(pcm)
+        lang = language if language in ALLOWED_LANGS else self.detect_language(pcm)
         text = self._decode(pcm, lang, prompt)
         reason = _looks_broken(text, seconds) if seconds >= 1.0 else ""
         if reason:

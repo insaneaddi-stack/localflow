@@ -237,6 +237,9 @@ say "$B Micro$N  $(c $MUT)— clique OK sur « LocalFlow souhaite accéder au mi
 if wait_until wait 300 20 "Pas de fenêtre ? Réglages → Confidentialité → Micro → LocalFlow." doctor microphone; then
   ok "Micro accordé"
 else ko "Micro non accordé — active-le dans Réglages → Micro, LocalFlow marchera aussitôt."; fi
+blank
+say "$B Réunions$N  $(c $MUT)— le son de l'appel (Zoom, Meet…) demande une 3e autorisation,$N"
+say "   $(c $MUT)« Enregistrement audio système », proposée par macOS à ta première réunion.$N"
 
 # ── fin
 celebrate

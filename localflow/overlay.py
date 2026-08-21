@@ -58,7 +58,11 @@ IDLE_W, IDLE_H = 76.0, 8.0
 HOVER_W, HOVER_H = 96.0, 10.0
 PILL_W, PILL_H = 124.0, 36.0
 PANEL_W, PANEL_H = 720.0, 292.0
-MARGINS = {"idle": 14.0, "hover": 14.0, "recording": 18.0, "processing": 18.0, "expanded": 44.0}
+MEET_W, MEET_H = 118.0, 22.0          # réunion en cours : point rouge + chrono
+OFFER_W, OFFER_H = 400.0, 44.0        # « Réunion détectée — enregistrer ? »
+MARGINS = {"idle": 14.0, "hover": 14.0, "recording": 18.0, "processing": 18.0, "expanded": 44.0,
+           "meeting": 14.0, "meeting_offer": 18.0}
+RED = (1.0, 0.30, 0.32)
 FPS = 60.0
 ANIM_S = 0.28
 BAR_COUNT, BAR_W, BAR_GAP = 5, 3.0, 4.0
@@ -201,6 +205,10 @@ class _BandView(NSView):
             self._draw_bars(content, st, k)
         elif st == "expanded":
             self._draw_panel(content, k)
+        elif st == "meeting":
+            self._draw_meeting(content, k)
+        elif st == "meeting_offer":
+            self._draw_offer(content, k)
         elif st == "hover":
             self._draw_idle(content, hover=True)
         else:
@@ -221,6 +229,45 @@ class _BandView(NSView):
         _white(0.10 if not hover else 0.18).setFill()
         lw = pill.size.width * 0.42
         NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(cx - lw / 2, cy - 0.75, lw, 1.5), 0.75, 0.75).fill()
+
+    @objc.python_method
+    def _draw_meeting(self, pill, k):
+        """Réunion en cours : point rouge qui pulse, chrono, mini-barres du micro."""
+        ov = self.overlay
+        info = ov.meeting_info() or {}
+        r, g, b = RED
+        pulse = 0.5 + 0.5 * math.sin(ov.phase * 2.2)
+        cx = pill.origin.x + 14
+        cy = pill.origin.y + pill.size.height / 2.0
+        NSColor.colorWithCalibratedRed_green_blue_alpha_(r, g, b, (0.18 + 0.18 * pulse) * k).setFill()
+        NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(cx - 7, cy - 7, 14, 14)).fill()
+        NSColor.colorWithCalibratedRed_green_blue_alpha_(r, g, b, (0.8 + 0.2 * pulse) * k).setFill()
+        NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(cx - 3.5, cy - 3.5, 7, 7)).fill()
+        txt = info.get("clock", "00:00")
+        _draw_text(txt, NSMakeRect(cx + 12, cy - 7, 60, 14), _attrs(11.5, 0.92 * k, weight=0.5))
+        # 3 mini-barres : niveau micro (moi) / système (eux)
+        lv = 0.5 * ov.level + 0.5 * float(info.get("sys_level", 0.0))
+        x0 = pill.origin.x + pill.size.width - 30
+        for i in range(3):
+            h = 3.0 + 8.0 * max(0.0, min(1.0, lv * (1.4 - 0.3 * abs(i - 1))))
+            _white((0.55 + 0.4 * lv) * k).setFill()
+            NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(x0 + i * 6, cy - h / 2, 3, h), 1.5, 1.5).fill()
+
+    @objc.python_method
+    def _draw_offer(self, pill, k):
+        """Proposition : « Réunion Zoom détectée — enregistrer ? [Oui] [Non] »."""
+        ov = self.overlay
+        info = ov.meeting_info() or {}
+        r, g, b = RED
+        cy = pill.origin.y + pill.size.height / 2.0
+        x = pill.origin.x + 18
+        NSColor.colorWithCalibratedRed_green_blue_alpha_(r, g, b, 0.9 * k).setFill()
+        NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(x, cy - 4, 8, 8)).fill()
+        label = info.get("offer", "Réunion détectée") + " — l'enregistrer ?"
+        _draw_text(label, NSMakeRect(x + 16, cy - 8, pill.size.width - 180, 16), _attrs(12.5, 0.94 * k, weight=0.4))
+        bx = pill.origin.x + pill.size.width - 18
+        w_no = self._chip(bx - 56, cy - 12, "Non", on=None, action="meeting_decline", alpha=k, min_w=56)
+        self._chip(bx - 56 - 8 - 64, cy - 12, "Oui", on=True, action="meeting_accept", alpha=k, min_w=64)
 
     @objc.python_method
     def _draw_glow(self, pill, st):
@@ -553,6 +600,8 @@ class Overlay:
         self._click_monitor = None
 
         self.state = "idle"
+        self.base_state = "idle"        # "meeting" pendant une réunion : état de repos
+        self.meeting_info = lambda: {}  # fourni par l'app : {"clock", "sys_level", "offer"}
         self.phase = 0.0
         self.level = 0.0
         self.bars = [0.0] * BAR_COUNT
@@ -613,6 +662,8 @@ class Overlay:
             "recording": (PILL_W, PILL_H),
             "processing": (PILL_W, PILL_H),
             "expanded": (PANEL_W, PANEL_H),
+            "meeting": (MEET_W, MEET_H),
+            "meeting_offer": (OFFER_W, OFFER_H),
         }[state]
         return (w, h, MARGINS[state])
 
@@ -628,7 +679,7 @@ class Overlay:
         self.content_alpha = 0.0
         if state == "recording":
             self.bars = [0.0] * BAR_COUNT
-        self.panel.setIgnoresMouseEvents_(state != "expanded")
+        self.panel.setIgnoresMouseEvents_(state not in ("expanded", "meeting_offer"))
         self.panel.setFrame_display_(self._frame_rect(), True)
         self.panel.orderFrontRegardless()
         if state == "expanded":
@@ -648,18 +699,28 @@ class Overlay:
             traceback.print_exc()
 
     def hide(self):
-        """API app : fin de dictée → retour à la barre réduite."""
+        """API app : fin de dictée → retour à l'état de repos (barre réduite, ou réunion en cours)."""
         try:
-            self._set_state("idle")
+            self._set_state(self.base_state)
         except Exception:
             import traceback
             traceback.print_exc()
+
+    def set_meeting(self, active):
+        """Réunion en cours : la bande affiche le chrono au repos."""
+        self.base_state = "meeting" if active else "idle"
+        if self.state in ("idle", "meeting", "meeting_offer", "hover"):
+            self._set_state(self.base_state)
+
+    def offer_meeting(self):
+        if self.state in ("idle", "hover", "meeting"):
+            self._set_state("meeting_offer")
 
     def set_text(self, text):
         """Conservé pour compatibilité : plus de texte en direct."""
 
     def toggle_expanded(self):
-        self._set_state("idle" if self.state == "expanded" else "expanded")
+        self._set_state(self.base_state if self.state == "expanded" else "expanded")
 
     def _on_hover(self, inside):
         pass  # le survol ne fait rien : la bande ne doit jamais gêner le Dock
@@ -725,7 +786,7 @@ class Overlay:
         def handler(event):
             try:
                 if event.window() is not self.panel:
-                    self._set_state("idle")
+                    self._set_state(self.base_state)
             except Exception:
                 pass
 
@@ -764,7 +825,7 @@ class Overlay:
                 self.view.updateTrackingAreas()
         if self.state == "expanded":
             self._update_gaze(now)
-        if self.state == "recording":
+        if self.state in ("recording", "meeting"):
             try:
                 lv = float(self._level_source())
             except Exception:
@@ -779,6 +840,6 @@ class Overlay:
                 new[mid + j] = 0.7 * bars[mid + j - 1] + 0.3 * bars[mid + j]
             self.bars = new
         # au repos, on redessine juste assez pour la respiration (économie CPU)
-        if self.state == "idle" and not animating and int(self.phase * FPS) % 4 != 0:
+        if self.state in ("idle", "meeting") and not animating and int(self.phase * FPS) % (4 if self.state == "idle" else 3) != 0:
             return
         self.view.setNeedsDisplay_(True)

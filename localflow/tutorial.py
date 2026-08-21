@@ -63,7 +63,13 @@ STEPS = [
                   "et « Copier » la dernière dictée. Touches 1–4, Esc pour fermer."],
         "hint": "Essaie…", "wait": "panel", "arrow": True,
     },
-    {   # 4 — fin
+    {   # 4 — réunions
+        "title": "Réunions",
+        "lines": ["Quand un appel démarre (Zoom, Meet, Teams…), LocalFlow propose de l'enregistrer :",
+                  "micro + son de l'appel, transcript en direct, compte rendu en Markdown. Tout reste sur ton Mac."],
+        "hint": "Aussi dans le panneau (bulle Réunion) et le menu 🎙", "wait": "key", "arrow": True,
+    },
+    {   # 5 — fin
         "title": "C'est tout.",
         "lines": ["Dictionnaire, moteur et réglages : icône 🎙 dans la barre des menus.",
                   "Dis « corrige X en Y » pour lui apprendre un mot. Bonne dictée."],

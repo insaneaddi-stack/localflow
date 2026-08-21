@@ -15,6 +15,11 @@ DEFAULTS = {
     "engine": "whisper",         # "whisper" (précis) ou "parakeet" (rapide)
     "auto_update": True,         # mise à jour automatique en arrière-plan
     "mic_always_on": False,      # micro ouvert en permanence (pré-roll permanent) ; sinon ouvert à la demande
+    "meeting_auto_detect": True, # proposer d'enregistrer quand une app d'appel utilise le micro
+    "meeting_summary_model": "qwen-1.7b",   # ou "qwen-4b" (~2,5 Go, meilleurs résumés)
+    "meeting_language": "fr",    # "fr" / "en" / "" (auto) : langue figée pour les réunions
+    "meeting_folder": "",        # vide = ~/Documents/LocalFlow Réunions
+    "meeting_keep_audio": True,  # garder l'audio .m4a à côté du .md
     "history": [],               # [{"t": iso, "text": str, "app": str}], plus récent en premier
     "stats": {},                 # {"YYYY-MM-DD": {"words": n, "dictations": n, "audio_s": s}}
 }
@@ -64,6 +69,22 @@ class Config:
     tone_auto = _bool_prop("tone_auto")
     auto_update = _bool_prop("auto_update")
     mic_always_on = _bool_prop("mic_always_on")
+    meeting_auto_detect = _bool_prop("meeting_auto_detect")
+    meeting_keep_audio = _bool_prop("meeting_keep_audio")
+
+    def _str_prop(key):
+        def fget(self):
+            return str(self.data.get(key, DEFAULTS[key]) or "")
+
+        def fset(self, value):
+            self.data[key] = str(value or "")
+            self.save()
+
+        return property(fget, fset)
+
+    meeting_summary_model = _str_prop("meeting_summary_model")
+    meeting_language = _str_prop("meeting_language")
+    meeting_folder = _str_prop("meeting_folder")
 
     @property
     def engine(self):

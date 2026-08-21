@@ -30,6 +30,20 @@ Prérequis : Mac Apple Silicon (M1+), macOS 14+, 16 Go de RAM conseillés.
 | « à la ligne », « nouveau paragraphe », « point d'interrogation »… | Commandes vocales |
 | « efface ça » | Annule le dernier collage |
 | « corrige mail en main » | Apprend une correction |
+| Menu 🎙 → Réunions → Démarrer | Enregistre une réunion (micro + son système), compte rendu Markdown |
+
+## Réunions 🎙●
+
+LocalFlow enregistre aussi tes réunions, **sans bot et sans cloud** (dans l'esprit de Granola / Wispr Flow Notetaker) :
+
+- **Micro + son de l'appel** (Zoom, Meet, Teams, FaceTime, Discord… ou un navigateur) via un petit helper Core Audio (macOS 14.2+). Tu es « Moi », tes interlocuteurs « Eux ».
+- **Proposition automatique** quand une app d'appel utilise le micro (bande du bas : Oui / Non), ou à la main : menu 🎙 → Réunions, ou la bulle **Réunion** du panneau (double-tap fn).
+- **Transcript en direct** par tours de parole + **bloc-notes** : tape tes notes pendant l'appel, l'IA les enrichit à la fin.
+- **Compte rendu** local (Qwen) : Résumé · Décisions · Actions · Questions ouvertes · Dates & chiffres, titre auto.
+- **Markdown** dans `~/Documents/LocalFlow Réunions/` (+ audio `.m4a` moi/eux en stéréo) — lisible par Obsidian, Notes, etc. Fenêtre **Mes réunions** : recherche, résumé, « pose une question » sur la réunion.
+- La dictée `fn` reste utilisable pendant une réunion. Fin automatique 90 s après la libération du micro.
+
+Autorisation supplémentaire, une fois : **Enregistrement de l'écran et audio système → LocalFlow** (demandée à la première réunion ; sans elle, le son de l'appel est muet et LocalFlow te le dit).
 
 - **Moteur** (menu 🎙 → Moteur) : Équilibré = Whisper large-v3-turbo (~0,7 s) · Précision max = Whisper large-v3 (~2 s, 3 Go, téléchargé à la demande) · Rapide = Parakeet (~0,4 s).
 - **Fiabilité** : prompt de style + dictionnaire donnés à Whisper, repli automatique en température, seconde passe en contexte complet si la sortie semble tronquée, passe-haut 80 Hz + gain automatique ; les 5 derniers enregistrements sont gardés dans `~/Library/Caches/LocalFlow/` pour diagnostiquer.

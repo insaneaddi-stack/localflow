@@ -34,6 +34,79 @@ _HP_ALPHA = 1.0 / (1.0 + 2 * np.pi * 80.0 / SAMPLE_RATE)  # passe-haut 80 Hz, 1e
 def _soft_limit(x):
     return np.where(np.abs(x) > 0.8, np.sign(x) * (0.8 + 0.2 * np.tanh((np.abs(x) - 0.8) / 0.2)), x)
 
+# ---- périphérique d'entrée par défaut, lu directement dans CoreAudio (toujours à jour) ----
+_ca = None
+
+def default_input_id():
+    """AudioDeviceID du micro par défaut selon CoreAudio, 0 si inconnu. PortAudio, lui, garde une
+    liste périmée après un changement (AirPods…) : on ne lui fait plus confiance pour ça."""
+    global _ca
+    try:
+        import ctypes
+        import ctypes.util
+        if _ca is None:
+            _ca = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreAudio"))
+
+        class Addr(ctypes.Structure):
+            _fields_ = [("sel", ctypes.c_uint32), ("scope", ctypes.c_uint32), ("elem", ctypes.c_uint32)]
+
+        dev = ctypes.c_uint32(0)
+        size = ctypes.c_uint32(4)
+        a = Addr(int.from_bytes(b"dIn ", "big"), int.from_bytes(b"glob", "big"), 0)
+        if _ca.AudioObjectGetPropertyData(1, ctypes.byref(a), 0, None, ctypes.byref(size), ctypes.byref(dev)) != 0:
+            return 0
+        return int(dev.value)
+    except Exception:
+        return 0
+
+_open_streams = set()
+_pa_lock = threading.Lock()
+
+def reset_portaudio():
+    """Réinitialise PortAudio pour qu'il relise les périphériques. Ferme d'abord TOUS nos flux
+    (réinitialiser avec un flux ouvert = crash natif) ; leurs propriétaires les rouvrent."""
+    with _pa_lock:
+        for st in list(_open_streams):
+            for op in (st.stop, st.close):
+                try:
+                    op()
+                except Exception:
+                    pass
+        _open_streams.clear()
+        try:
+            sd._terminate()
+        except Exception:
+            pass
+        try:
+            sd._initialize()
+        except Exception:
+            pass
+
+def open_input_stream(**kwargs):
+    """sd.InputStream(...) démarré, avec un second essai après réinitialisation de PortAudio
+    (erreur -9986 typique après un changement de périphérique)."""
+    try:
+        with _pa_lock:
+            stream = sd.InputStream(**kwargs)
+            stream.start()
+    except Exception:
+        reset_portaudio()
+        with _pa_lock:
+            stream = sd.InputStream(**kwargs)
+            stream.start()
+    _open_streams.add(stream)
+    return stream
+
+def close_input_stream(stream):
+    if stream is None:
+        return
+    _open_streams.discard(stream)
+    for op in (stream.stop, stream.close):
+        try:
+            op()
+        except Exception:
+            pass
+
 class Recorder:
     def __init__(self):
         self._lock = threading.Lock()
@@ -60,39 +133,40 @@ class Recorder:
         """Ouvre (ou ré-ouvre) le flux sur le périphérique d'entrée par défaut."""
         with self._lock:
             self._close_stream()
+            self._device_id = default_input_id()
+            if self._device_id and self._device_id != getattr(self, "_opened_id", None) and getattr(self, "_opened_id", None):
+                reset_portaudio()   # le périphérique a changé depuis la dernière ouverture : liste à rafraîchir
+            self._opened_id = self._device_id
             try:
                 self._device_name = sd.query_devices(kind="input")["name"]
             except Exception:
                 self._device_name = None
-            self._stream = sd.InputStream(
+            self._stream = open_input_stream(
                 samplerate=SAMPLE_RATE, channels=1, dtype="float32",
                 blocksize=BLOCK, callback=self._callback,
             )
-            self._stream.start()
             self._last_callback = time.time()
 
     def _close_stream(self):
         stream, self._stream = self._stream, None
-        if stream is None:
-            return
-        for op in (stream.stop, stream.close):
-            try:
-                op()
-            except Exception:
-                pass
+        close_input_stream(stream)
 
     def healthy(self):
-        """Faux si le flux est mort ou si le périphérique par défaut a changé (AirPods…)."""
+        """Faux si le flux est mort, muet, ou si le périphérique par défaut a changé (AirPods…)."""
         if self._stream is None:
             return False
         if time.time() - self._last_callback > 2.0:
             return False
-        try:
-            if sd.query_devices(kind="input")["name"] != self._device_name:
-                return False
-        except Exception:
-            pass
+        if self._stream not in _open_streams:   # fermé par une réinitialisation PortAudio
+            return False
+        dev = default_input_id()
+        if dev and dev != self._device_id:
+            return False
         return True
+
+    def stalled(self, max_gap=1.5):
+        """Pendant une dictée : vrai si le micro ne livre plus rien (périphérique parti)."""
+        return self._recording and time.time() - self._last_callback > max_gap
 
     @property
     def open_(self):
@@ -159,8 +233,8 @@ class Recorder:
         return self._recording
 
     def start(self, live=False):
-        if self._stream is None:
-            self.open()          # micro fermé (mode économe) : ouverture à la demande
+        if self._stream is None or not self.healthy():
+            self.open()          # micro fermé (mode économe) ou périphérique changé : (ré)ouverture
         with self._lock:
             if self._recording:
                 return
