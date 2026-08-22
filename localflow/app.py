@@ -68,6 +68,8 @@ BUSY_TIMEOUT_S = 90  # au-delà, on considère le pipeline coincé et on se déb
 HEALTH_EVERY_S = 2
 MIC_LINGER_S = 15        # micro gardé ouvert après une dictée (enchaînements sans latence), puis fermé
 STALE_UI_S = 8       # overlay/icône restés bloqués sans enregistrement ni traitement
+KEEP_WARM_S = 30     # au repos : micro-inférence périodique pour que macOS ne swappe pas le modèle
+SLOW_S = 3.0         # au-delà, on note l'état mémoire dans le log (diagnostic)
 
 try:
     _log_file = open(LOG_PATH, "a")
@@ -104,6 +106,14 @@ def _notify(title, message):
         )
     except Exception:
         print(f"LocalFlow — {title}: {message}")
+
+def _mem_state():
+    """Swap utilisé / libre (diagnostic des lenteurs)."""
+    try:
+        out = subprocess.run(["sysctl", "-n", "vm.swapusage"], capture_output=True, text=True, timeout=2).stdout
+        return "swap " + " ".join(out.split())
+    except Exception:
+        return "swap ?"
 
 def _acquire_single_instance():
     """Empêche deux LocalFlow en parallèle (= double collage)."""
@@ -385,7 +395,11 @@ class LocalFlowApp(rumps.App):
 
         while True:
             try:
-                kind, payload = self._jobs.get()
+                try:
+                    kind, payload = self._jobs.get(timeout=KEEP_WARM_S)
+                except queue.Empty:
+                    self._keep_warm()
+                    continue
                 if kind == "preload":
                     self.cleaner.preload()
                 elif kind == "load_parakeet":
@@ -396,6 +410,21 @@ class LocalFlowApp(rumps.App):
             except Exception:
                 _log("erreur worker (ignorée):\n" + traceback.format_exc())
                 self._busy = False
+
+    def _keep_warm(self):
+        """Garde les poids de Whisper « chauds » : sous pression mémoire (swap), macOS expulse
+        les pages inutilisées et la dictée suivante met 5–15 s à les recharger."""
+        if self.recorder.recording or self._busy or self.meeting_rec.active:
+            return
+        try:
+            t0 = time.time()
+            with self.model_lock:
+                self.transcriber.transcribe(np.zeros(SAMPLE_RATE // 2, dtype=np.float32), language="fr")
+            dt = time.time() - t0
+            if dt > 1.5:
+                _log(f"keep-warm lent ({dt:.1f}s) : modèle rechargé depuis le swap — {_mem_state()}")
+        except Exception:
+            pass
 
     def _load_parakeet(self):
         """Charge Parakeet (une fois) et chauffe le mode direct. Retourne l'instance."""
@@ -786,8 +815,10 @@ class LocalFlowApp(rumps.App):
                 _on_main(self.overlay.refresh)
                 # Le texte dicté n'est PAS écrit dans le log (vie privée).
                 retry = getattr(self.transcriber, "last_retry", "")
-                _log(f"{how} en {time.time()-t0:.1f}s via {source} ({words} mots, ton {tone}, app {app_name or '?'})"
-                     + (f" — 2e passe : {retry}" if retry else ""))
+                dt = time.time() - t0
+                _log(f"{how} en {dt:.1f}s via {source} ({words} mots, ton {tone}, app {app_name or '?'})"
+                     + (f" — 2e passe : {retry}" if retry else "")
+                     + (f" — LENT : {_mem_state()}" if dt > SLOW_S else ""))
             else:
                 _log("transcription vide, rien à coller")
         except Exception as exc:
@@ -795,6 +826,11 @@ class LocalFlowApp(rumps.App):
             _notify("Erreur", str(exc))
         finally:
             self._busy = False
+            try:
+                import mlx.core as mx
+                mx.clear_cache()   # rend les tampons intermédiaires : moins de pages à swapper
+            except Exception:
+                pass
 
             def done():
                 self.overlay.hide()
