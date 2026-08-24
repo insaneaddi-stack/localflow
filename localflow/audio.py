@@ -62,6 +62,42 @@ def default_input_id():
 _open_streams = set()
 _pa_lock = threading.Lock()
 
+# ---- thread d'opérations audio ----
+# PortAudio peut se FIGER (retour de veille) : aucune ouverture/fermeture ne doit se faire sur
+# le thread principal. Tout passe ici, avec timeout ; l'app surveille `audio_stuck()` et se
+# redémarre proprement si la couche audio reste figée.
+_ops_q = queue.Queue()
+_ops_busy_since = None
+
+def _ops_worker():
+    global _ops_busy_since
+    while True:
+        fn, done, result = _ops_q.get()
+        _ops_busy_since = time.time()
+        try:
+            result.append(fn())
+        except Exception as exc:
+            result.append(exc)
+        _ops_busy_since = None
+        done.set()
+
+threading.Thread(target=_ops_worker, daemon=True, name="audio-ops").start()
+
+def run_audio_op(fn, timeout=6.0):
+    """Exécute fn sur le thread audio. Renvoie son résultat, ou lève TimeoutError / son exception."""
+    done, result = threading.Event(), []
+    _ops_q.put((fn, done, result))
+    if not done.wait(timeout):
+        raise TimeoutError("opération audio bloquée (PortAudio figé)")
+    if result and isinstance(result[0], Exception):
+        raise result[0]
+    return result[0] if result else None
+
+def audio_stuck():
+    """Depuis combien de secondes l'opération audio en cours est figée (0 si tout va bien)."""
+    t = _ops_busy_since
+    return time.time() - t if t else 0.0
+
 def reset_portaudio():
     """Réinitialise PortAudio pour qu'il relise les périphériques. Ferme d'abord TOUS nos flux
     (réinitialiser avec un flux ouvert = crash natif) ; leurs propriétaires les rouvrent."""
@@ -130,7 +166,10 @@ class Recorder:
     # ---- flux permanent ----
 
     def open(self):
-        """Ouvre (ou ré-ouvre) le flux sur le périphérique d'entrée par défaut."""
+        """Ouvre (ou ré-ouvre) le flux — sur le thread audio, jamais sur l'appelant si PortAudio fige."""
+        run_audio_op(self._open_impl, timeout=6.0)
+
+    def _open_impl(self):
         with self._lock:
             self._close_stream()
             self._device_id = default_input_id()
@@ -273,7 +312,15 @@ class Recorder:
                 self.live_queue.put(None)
             self._chunks = []
 
-    def close(self):
+    def close(self, wait=True):
+        """Fermeture via le thread audio ; wait=False n'attend pas (santé périodique)."""
         with self._lock:
             self._recording = False
+        try:
+            run_audio_op(self._close_impl, timeout=3.0 if wait else 0.2)
+        except TimeoutError:
+            pass   # l'opération continue sur le thread audio ; audio_stuck() la surveille
+
+    def _close_impl(self):
+        with self._lock:
             self._close_stream()

@@ -23,6 +23,14 @@ NAME="Info.plist du bundle complet";  t sh -c 'plutil -p LocalFlow.app/Contents/
 NAME="signature du bundle";           t codesign --verify --deep --strict LocalFlow.app
 NAME="config : défauts + sauvegarde"; t $PY -c "
 from localflow.config import Config, DEFAULTS; c=Config(); [getattr(c,k) for k in ('cleanup_enabled','engine','meeting_summary_model','meeting_language','meeting_auto_detect')]"
+NAME="thread audio : op + timeout"; t $PY -c "
+import time
+from localflow.audio import run_audio_op, audio_stuck
+assert run_audio_op(lambda: 42) == 42
+try:
+    run_audio_op(lambda: time.sleep(2), timeout=0.3); raise SystemExit('timeout attendu')
+except TimeoutError: pass
+assert audio_stuck() > 0; time.sleep(2.2); assert audio_stuck() == 0"
 NAME="micro : CoreAudio + ouverture + reset PortAudio"; t $PY -c "
 import time
 from localflow.audio import default_input_id, open_input_stream, close_input_stream, reset_portaudio, Recorder

@@ -21,7 +21,7 @@ import numpy as np
 import rumps
 from AppKit import NSApp, NSImage, NSOperationQueue
 
-from .audio import SAMPLE_RATE, Recorder
+from .audio import SAMPLE_RATE, Recorder, audio_stuck
 from .cleanup import Cleaner, cleanup_rules
 from .commands import UNDO, apply_commands
 from .config import Config
@@ -421,7 +421,7 @@ class LocalFlowApp(rumps.App):
             with self.model_lock:
                 self.transcriber.transcribe(np.zeros(SAMPLE_RATE // 2, dtype=np.float32), language="fr")
             dt = time.time() - t0
-            if dt > 1.5:
+            if 1.5 < dt < 120:   # au-delà : le Mac dormait pendant l'inférence, pas une lenteur réelle
                 _log(f"keep-warm lent ({dt:.1f}s) : modèle rechargé depuis le swap — {_mem_state()}")
         except Exception:
             pass
@@ -574,13 +574,21 @@ class LocalFlowApp(rumps.App):
 
     def _health_check(self, _timer):
         try:
+            # PortAudio figé (retour de veille) : rien ne peut le débloquer depuis le processus →
+            # redémarrage propre, le LaunchAgent relance en ~5 s et le modèle recharge.
+            stuck = audio_stuck()
+            if stuck > 12:
+                _log(f"audio figé depuis {stuck:.0f}s (PortAudio, retour de veille ?) → redémarrage automatique")
+                _notify("LocalFlow redémarre", "La couche audio de macOS s'est figée : redémarrage automatique (~10 s).")
+                threading.Timer(1.2, lambda: os._exit(86)).start()
+                return
             if not self.recorder.recording:
                 if self.config.mic_always_on:
                     if not self.recorder.healthy():
                         self._open_mic()  # flux mort ou périphérique changé (AirPods…)
                 elif self.recorder.open_:
                     if time.time() - self.recorder.last_used > MIC_LINGER_S or not self.recorder.healthy():
-                        self.recorder.close()  # mode économe : on referme après inactivité
+                        self.recorder.close(wait=False)  # mode économe, sans jamais bloquer le thread principal
                         _log("micro refermé (inactivité)")
             if not self._listener_ok:
                 self._start_listener()
