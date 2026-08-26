@@ -1,20 +1,28 @@
-"""Détection d'une réunion en cours, sans aucune autorisation supplémentaire :
+"""Détection d'une réunion en cours, sans aucune autorisation supplémentaire.
 
-  « une app d'appel tourne »  +  « le micro est utilisé par une autre app »  ⇒  réunion probable.
+  « CETTE app capture le micro en ce moment »  ⇒  elle est en appel.
 
-- Apps d'appel : Zoom, Teams, FaceTime, Webex, Discord, Slack, Google Meet (app PWA)…
-- Navigateur (Meet/Teams web) : on ne peut pas lire l'onglet sans autorisation d'enregistrement
-  d'écran ; on se contente de « navigateur au premier plan + micro utilisé ».
-- Micro utilisé : propriété CoreAudio `kAudioDevicePropertyDeviceIsRunningSomewhere` du
-  périphérique d'entrée par défaut (vrai aussi quand NOTRE dictée tourne → l'app passe
-  `ignore=True` dans ce cas).
+Un seul signal, exact, au lieu de deux devinés. CoreAudio (macOS 14.4+) énumère les
+processus audio et dit lesquels capturent l'entrée — on obtient donc le PID de l'app
+réellement en communication.
 
-Pendant l'enregistrement, c'est NOTRE micro qui est ouvert : « micro utilisé » ne dit plus
-rien. La fin automatique repose donc sur l'app d'appel : si celle qui tournait au départ
-(Zoom, Teams…) se ferme pendant APP_GONE_END_S, la réunion est terminée. Réunion dans un
-navigateur : pas de fin auto, l'utilisateur termine à la main.
+Ce que ça corrige, et pourquoi l'ancienne version se trompait tout le temps :
+
+- Elle nommait la mauvaise app. `running_call_app()` renvoyait la première app d'appel
+  LANCÉE. WhatsApp, Slack, Discord, Telegram tournent en permanence : ils étaient donc
+  désignés dès que n'importe quoi touchait au micro.
+- Elle ne savait pas qui utilisait le micro, seulement que « quelqu'un » l'utilisait —
+  d'où le paramètre `ignore_mic` quand notre dictée tournait, qui aveuglait la détection
+  au lieu de la préciser. On exclut maintenant notre propre PID, exactement.
+- La réunion ne se terminait jamais seule. La fin auto exigeait que l'app d'appel QUITTE ;
+  personne ne quitte WhatsApp, donc l'enregistrement tournait jusqu'au plafond de 4 h.
+  On surveille maintenant l'arrêt de la CAPTURE, ce qui arrive à chaque fin d'appel.
+
+Repli : sur un système où l'énumération par processus échoue, on retombe sur l'ancien
+couple « app lancée + micro occupé ».
 """
 
+import os
 import time
 
 CALL_APPS = {
@@ -41,12 +49,90 @@ BROWSERS = {
     "com.microsoft.edgemac": "Edge", "com.brave.Browser": "Brave", "company.thebrowser.Browser": "Arc",
     "com.vivaldi.Vivaldi": "Vivaldi", "com.operasoftware.Opera": "Opera", "com.apple.SafariTechnologyPreview": "Safari",
 }
-MIC_BUSY_START_S = 4.0      # micro utilisé depuis au moins 4 s avant de proposer
-APP_GONE_END_S = 20.0       # l'app d'appel du départ a disparu depuis 20 s ⇒ la réunion est finie
+MIC_BUSY_START_S = 4.0      # l'app capture depuis au moins 4 s avant de proposer
+APP_GONE_END_S = 20.0       # elle a cessé de capturer depuis 20 s ⇒ l'appel est fini
 REOFFER_S = 20 * 60         # ne pas re-proposer la même app avant 20 min après un refus
 
 def _fourcc(s):
     return int.from_bytes(s.encode("ascii"), "big")
+
+
+# ---- qui capture le micro, exactement ----
+
+def _capturing_pids():
+    """PID des processus qui capturent l'entrée audio en ce moment.
+
+    kAudioHardwarePropertyProcessObjectList ('prs#') énumère les objets processus ;
+    kAudioProcessPropertyIsRunningInput ('piri') dit lesquels capturent l'entrée.
+    Renvoie None si l'API n'est pas exploitable — l'appelant retombe sur l'ancien test.
+    """
+    try:
+        import ctypes
+        import ctypes.util
+
+        ca = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreAudio"))
+
+        class Addr(ctypes.Structure):
+            _fields_ = [("sel", ctypes.c_uint32), ("scope", ctypes.c_uint32), ("elem", ctypes.c_uint32)]
+
+        glob = _fourcc("glob")
+        addr = Addr(_fourcc("prs#"), glob, 0)
+        size = ctypes.c_uint32(0)
+        if ca.AudioObjectGetPropertyDataSize(1, ctypes.byref(addr), 0, None, ctypes.byref(size)) or not size.value:
+            return None
+        n = size.value // 4
+        objs = (ctypes.c_uint32 * n)()
+        if ca.AudioObjectGetPropertyData(1, ctypes.byref(addr), 0, None, ctypes.byref(size), objs):
+            return None
+        out = []
+        for obj in objs:
+            a = Addr(_fourcc("piri"), glob, 0)
+            val = ctypes.c_uint32(0)
+            sz = ctypes.c_uint32(4)
+            if ca.AudioObjectGetPropertyData(obj, ctypes.byref(a), 0, None, ctypes.byref(sz), ctypes.byref(val)) or not val.value:
+                continue
+            a = Addr(_fourcc("ppid"), glob, 0)
+            pid = ctypes.c_int32(0)
+            sz = ctypes.c_uint32(4)
+            if ca.AudioObjectGetPropertyData(obj, ctypes.byref(a), 0, None, ctypes.byref(sz), ctypes.byref(pid)):
+                continue
+            out.append(int(pid.value))
+        return out
+    except Exception:
+        return None
+
+
+def capturing_apps(exclude_self=True):
+    """[(nom, bundle)] des apps connues qui capturent le micro. None si indéterminable.
+
+    Le PID vient de CoreAudio, le bundle de NSRunningApplication : on évite ainsi de
+    gérer la durée de vie d'un CFString renvoyé par AudioObjectGetPropertyData.
+    """
+    pids = _capturing_pids()
+    if pids is None:
+        return None
+    if exclude_self:
+        me = os.getpid()
+        pids = [p for p in pids if p != me]
+    if not pids:
+        return []
+    try:
+        from AppKit import NSWorkspace
+
+        by_pid = {}
+        for app in NSWorkspace.sharedWorkspace().runningApplications():
+            by_pid[int(app.processIdentifier())] = app.bundleIdentifier() or ""
+    except Exception:
+        return None
+    out = []
+    for p in pids:
+        bid = by_pid.get(p, "")
+        if not bid:
+            continue
+        name = CALL_APPS.get(bid) or BROWSERS.get(bid)
+        if name:
+            out.append((name, bid))
+    return out
 
 def mic_in_use():
     """Vrai si un processus (nous compris) lit le micro par défaut. False si indéterminable."""
@@ -129,41 +215,82 @@ class MeetingDetector:
         self.offered = None
 
     def began(self, app_name=""):
-        """L'enregistrement démarre : mémorise l'app d'appel à surveiller (si native)."""
-        found = running_call_app()
-        self.start_app = found if (found and (not app_name or found[0] == app_name)) else None
+        """L'enregistrement démarre : mémorise l'app d'appel à surveiller."""
+        caps = capturing_apps()
+        found = None
+        if caps:
+            # celle qui capture, et si l'app est nommée, celle qui porte ce nom
+            found = next((c for c in caps if not app_name or c[0] == app_name), caps[0])
+        elif caps is None:
+            legacy = running_call_app()
+            found = legacy if (legacy and (not app_name or legacy[0] == app_name)) else None
+        self.start_app = found
         self.gone_since = None
         self.busy_since = self.free_since = None
         self.offered = None
 
     def poll(self, ignore_mic=False, recording=False):
         now = time.time()
+        caps = capturing_apps()          # None = API indisponible → repli
         if recording:
-            if self.start_app is None:
-                return None
-            name, bid = self.start_app
+            return self._poll_recording(now, caps)
+        if caps is None:
+            return self._poll_legacy(now, ignore_mic)
+
+        # `ignore_mic` n'a plus lieu d'être : notre propre PID est déjà exclu, donc la
+        # détection reste fiable pendant qu'on dicte.
+        if not caps:
+            self.busy_since = None
+            self.offered = None
+            return None
+        name, bid = caps[0]
+        if self.busy_since is None or self.offered != bid:
+            self.busy_since = now
+        if now - self.busy_since < MIC_BUSY_START_S:
+            return None
+        if now - self.declined.get(bid, 0) < REOFFER_S or self.offered == bid:
+            return None
+        self.offered = bid
+        return ("offer", name)
+
+    def _poll_recording(self, now, caps):
+        """Pendant l'enregistrement : l'appel est fini quand l'app CESSE DE CAPTURER.
+
+        L'ancienne version attendait qu'elle quitte — ce qui n'arrive jamais pour
+        WhatsApp ou Slack, donc l'enregistrement ne s'arrêtait pas de lui-même.
+        """
+        if self.start_app is None:
+            return None
+        name, bid = self.start_app
+        if caps is None:
             try:
                 from AppKit import NSWorkspace
-                alive = any((a.bundleIdentifier() or "") == bid for a in NSWorkspace.sharedWorkspace().runningApplications())
+                still = any((a.bundleIdentifier() or "") == bid
+                            for a in NSWorkspace.sharedWorkspace().runningApplications())
             except Exception:
-                alive = True
-            if alive:
-                self.gone_since = None
-            else:
-                self.gone_since = self.gone_since or now
-                if now - self.gone_since > APP_GONE_END_S:
-                    self.start_app = None
-                    return ("ended", name)
+                still = True
+        else:
+            still = any(c[1] == bid for c in caps)
+        if still:
+            self.gone_since = None
             return None
+        self.gone_since = self.gone_since or now
+        if now - self.gone_since > APP_GONE_END_S:
+            self.start_app = None
+            return ("ended", name)
+        return None
+
+    def _poll_legacy(self, now, ignore_mic):
+        """Repli quand l'énumération par processus est indisponible : ancien
+        comportement, « app d'appel lancée + micro occupé »."""
         busy = False if ignore_mic else mic_in_use()
         if busy:
             self.busy_since = self.busy_since or now
-            self.free_since = None
         else:
-            self.free_since = self.free_since or now
             self.busy_since = None
-        if not busy or now - self.busy_since < MIC_BUSY_START_S:
             self.offered = None
+            return None
+        if now - self.busy_since < MIC_BUSY_START_S:
             return None
         app = running_call_app() or frontmost_browser()
         if app is None:

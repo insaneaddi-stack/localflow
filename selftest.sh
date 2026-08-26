@@ -45,6 +45,22 @@ s=_Segmenter('me'); out=[]
 sig=np.concatenate([np.zeros(SAMPLE_RATE), 0.2*np.sin(np.arange(SAMPLE_RATE*2)*2*np.pi*440/SAMPLE_RATE), np.zeros(SAMPLE_RATE)]).astype(np.float32)
 for i in range(0, len(sig)-BLOCK, BLOCK): out += s.feed(sig[i:i+BLOCK])
 out += s.flush(); assert len(out)==1 and 1.5 < out[0][1]-out[0][0] < 3.6, out"
+NAME="détection réunion : par processus, pas par app lancée"; t $PY -c "
+import os, time, sounddevice as sd
+from localflow.meeting_detect import _capturing_pids, capturing_apps, MeetingDetector, CALL_APPS
+pids = _capturing_pids()
+assert pids is not None, 'énumération des processus audio indisponible'
+# Le piège d'origine : running_call_app() renvoyait n'importe quelle app d'appier LANCÉE
+# (WhatsApp, Slack…), d'où des propositions permanentes sans le moindre appel.
+st = sd.InputStream(samplerate=16000, channels=1); st.start(); time.sleep(0.8)
+during = _capturing_pids(); apps = capturing_apps()
+st.stop(); st.close()
+assert os.getpid() in during, 'notre capture devrait être vue'
+assert all(b != \"\" for _, b in apps), apps
+assert not any(b == 'org.python.python' for _, b in apps), 'notre propre capture doit être exclue'
+d = MeetingDetector(); assert d.poll() is None, 'ne doit rien proposer sans appel'
+time.sleep(0.3)
+assert d.poll() is None"
 NAME="apprentissage : multi-mots, démotion, priorité"; t $PY -c "
 from localflow.learning import diff_corrections, Learner
 assert diff_corrections('On stocke ça dans meta mind depuis mars.', 'On stocke ça dans MetaMind depuis mars.') == [('meta mind', 'MetaMind')]

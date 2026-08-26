@@ -1025,7 +1025,9 @@ class LocalFlowApp(rumps.App):
             self.overlay.hide()
         if not self.config.meeting_auto_detect or self.transcriber is None:
             return
-        ignore = self.recorder.open_ or rec.active   # notre propre micro rendrait « micro utilisé » toujours vrai
+        # ignore_mic ne sert plus que sur le chemin de repli : la détection par processus
+        # exclut déjà notre propre PID, donc elle reste fiable pendant qu'on dicte.
+        ignore = self.recorder.open_ or rec.active
         res = self.detector.poll(ignore_mic=ignore, recording=rec.active)
         if res is None:
             return
