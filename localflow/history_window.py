@@ -156,8 +156,10 @@ class _ListView(NSView):
             # textes
             label = (e.get("app") or "Dictée").upper()
             _draw_text(label, NSMakeRect(rect.origin.x + 40, rect.origin.y + 10, 260, 14), _attrs(10.5, 0.5, weight=0.5))
-            right = "Copié ✓" if copied else _fmt_time(e.get("t", ""))
-            ra = _attrs(10.5, 0.95 if copied else 0.4, weight=0.5)
+            # Un clic copie la ligne, mais rien ne le disait avant d'avoir essayé :
+            # au survol, l'heure cède la place à l'action.
+            right = "Copié ✓" if copied else ("Copier" if hovered else _fmt_time(e.get("t", "")))
+            ra = _attrs(10.5, 0.95 if copied else (0.75 if hovered else 0.4), weight=0.5)
             if copied:
                 ra = dict(ra); ra[NSForegroundColorAttributeName] = c(0.95)
             rw = _text_width(right, ra)
@@ -208,7 +210,8 @@ class _StatsView(NSView):
                 va = _attrs(10, 0.8 if is_today else 0.5, weight=0.5)
                 vw = _text_width(str(words), va)
                 _draw_text(str(words), NSMakeRect(x + bw / 2 - vw / 2, base_y + h + 4, vw + 2, 12), va)
-            lbl = "LMMJVSD"[d.weekday()]
+            # « LMMJVSD » donnait deux « M » (mardi/mercredi) : graphe illisible.
+            lbl = ("L", "Ma", "Me", "J", "V", "S", "D")[d.weekday()]
             la = _attrs(10.5, 0.9 if is_today else 0.4, weight=0.5 if is_today else None)
             lw = _text_width(lbl, la)
             _draw_text(lbl, NSMakeRect(x + bw / 2 - lw / 2, base_y - 18, lw + 2, 13), la)

@@ -75,6 +75,13 @@ class Dictionary:
             return text
         for rx, good in self.replacements:
             text = rx.sub(good, text)
+        # Entrées multi-mots (« AURA STUDIO ») : la correction floue ci-dessous ne voit
+        # qu'un mot à la fois et les manquait. On impose leur casse exacte d'abord, sinon
+        # le modèle rend « Aura Studio » et plus rien ne le rattrape.
+        for w in self.words:
+            if " " in w:
+                text = re.sub(r"\b" + r"\s+".join(re.escape(p) for p in w.split()) + r"\b",
+                              w, text, flags=re.IGNORECASE)
         # correction floue : mot transcrit proche d'un mot du dictionnaire (1 seul mot)
         singles = [w for w in self.words if " " not in w and len(w) >= 4]
         if not singles:

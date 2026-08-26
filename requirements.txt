@@ -1,4 +1,4 @@
-parakeet-mlx==0.5.2
+mlx-qwen3-asr==0.3.5
 mlx-lm==0.31.3
 mlx==0.32.0
 rumps==0.4.0
@@ -7,5 +7,4 @@ sounddevice==0.5.5
 numpy
 pyobjc-framework-ApplicationServices>=10.0
 pillow
-mlx-whisper>=0.4.3
 pyobjc-framework-AVFoundation>=10.0

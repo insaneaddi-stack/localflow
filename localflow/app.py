@@ -34,6 +34,7 @@ from .meeting import DEFAULT_FOLDER, MeetingIndex, MeetingRecorder, write_markdo
 from .meeting_detect import MeetingDetector
 from .meeting_window import LiveMeetingWindow, MeetingsWindow
 from .summarize import MODELS as SUMMARY_MODELS, Summarizer
+from . import sounds
 from . import sysaudio
 from . import update
 from .tutorial import Tutorial
@@ -58,8 +59,8 @@ MIN_VOICED_S = 0.12      # seuil bas : le détecteur ne compte que les pics (sil
 MAX_RECORD_S = 600       # mains-libres : arrêt auto après 10 min
 LIVE_JOIN_S = 15         # attente max du thread « direct » en fin de dictée
 
-SOUND_START = "/System/Library/Sounds/Tink.aiff"
-SOUND_STOP = "/System/Library/Sounds/Pop.aiff"
+SOUND_START = sounds.START
+SOUND_STOP = sounds.STOP
 
 ICON_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "icon_1024.png")
 LOG_PATH = os.path.expanduser("~/.localflow.log")
@@ -139,12 +140,12 @@ class LocalFlowApp(rumps.App):
     def __init__(self):
         super().__init__(ICON_LOADING, quit_button=None)
         self.config = Config()
+        sounds.preload()          # en RAM tout de suite : le premier fn ne doit rien attendre
         self.recorder = Recorder()
         self.cleaner = Cleaner()
         self.dictionary = Dictionary()
         self.learner = Learner(self.config, _notify, _log)
-        self.transcriber = None   # moteur final (Whisper ou Parakeet)
-        self.parakeet = None      # Parakeet : moteur rapide / transcription en direct
+        self.transcriber = None   # Qwen3-ASR : dictée, direct et réunions
         try:  # icône de l'app (Dock quand une fenêtre est ouverte, Cmd+Tab)
             icon = NSImage.alloc().initWithContentsOfFile_(ICON_PATH)
             if icon:
@@ -167,19 +168,10 @@ class LocalFlowApp(rumps.App):
         self.item_stats = rumps.MenuItem("Statistiques : —", callback=self._open_history)
         self.item_cleanup = self._toggle_item("Nettoyage IA", "cleanup_enabled", self._toggle_cleanup)
         self.item_live = self._toggle_item("Transcription en direct", "live_enabled")
-        self.item_fast = self._toggle_item("Coller le direct (plus rapide)", "live_paste_fast")
+        self.item_fast = self._toggle_item("Coller le texte du direct (moins précis)", "live_paste_fast")
         self.item_tone = self._toggle_item("Ton adapté à l'app", "tone_auto")
         self.item_sounds = self._toggle_item("Sons", "sounds_enabled")
         self.item_mic = self._toggle_item("Micro toujours prêt (point orange permanent)", "mic_always_on", self._toggle_mic)
-        self.item_engine = rumps.MenuItem("Moteur", callback=None)
-        self._engine_items = {}
-        for key, label in (("whisper", "Équilibré — Whisper turbo (~0,7 s)"),
-                           ("whisper-max", "Précision max — Whisper large-v3 (~2 s, 3 Go)"),
-                           ("parakeet", "Rapide — Parakeet (~0,4 s, moins précis)")):
-            it = rumps.MenuItem(label, callback=lambda item, k=key: self._set_engine(k))
-            it.state = self.config.engine == key
-            self._engine_items[key] = it
-            self.item_engine.add(it)
         self.item_panel = rumps.MenuItem("Panneau (double-tap fn)", callback=lambda _i: self.overlay.toggle_expanded())
         self.item_history = rumps.MenuItem("Historique…", callback=self._open_history)
         self.item_dict = rumps.MenuItem("Dictionnaire…", callback=self._open_dictionary)
@@ -227,7 +219,6 @@ class LocalFlowApp(rumps.App):
             self.item_tone,
             self.item_live,
             self.item_fast,
-            self.item_engine,
             self.item_sounds,
             self.item_mic,
             None,
@@ -246,7 +237,7 @@ class LocalFlowApp(rumps.App):
         self.overlay.meeting_info = self._meeting_info
 
         # Réunions : enregistreur (micro + son système), résumé, index, détection, fenêtres
-        self.model_lock = threading.Lock()   # Whisper partagé entre dictée et réunion
+        self.model_lock = threading.Lock()   # Qwen3-ASR partagé entre dictée, direct et réunion
         self.meeting_rec = MeetingRecorder(self._meeting_transcribe, self.model_lock, _log, prompt=self._asr_prompt,
                                            on_segment=lambda seg: _on_main(self.live_window.refresh),
                                            on_error=lambda msg: _notify("Réunion", msg),
@@ -351,26 +342,22 @@ class LocalFlowApp(rumps.App):
     def _worker(self):
         """Thread de traitement. Ne meurt jamais : relance le chargement du
         modèle en cas d'échec, et survit à toute erreur d'un job."""
-        import numpy as np
-
         delay = 5
+        notified = False
         while self.transcriber is None:
             try:
-                if self.config.engine in ("whisper", "whisper-max"):
-                    try:
-                        from .transcribe import WhisperTranscriber
-                        if self.config.engine == "whisper-max":
-                            os.environ.pop("HF_HUB_OFFLINE", None)  # téléchargement à la demande autorisé
-                        self.transcriber = WhisperTranscriber(self.config.engine)
-                    except Exception:
-                        _log("Whisper indisponible, repli sur Parakeet:\n" + traceback.format_exc())
-                        _notify("Whisper indisponible", "Repli sur Parakeet (moins précis).")
-                if self.transcriber is None:
-                    self.transcriber = self._load_parakeet()
+                from .transcribe import Transcriber
+
+                self.transcriber = Transcriber()
             except Exception as exc:
                 _log("échec chargement du moteur:\n" + traceback.format_exc())
-                _notify("Modèle indisponible", f"Nouvel essai dans {delay}s — {exc}")
-                _on_main(lambda: setattr(self.item_status, "title", f"⚠️ Modèle : nouvel essai dans {delay}s"))
+                # Une seule notification : la boucle peut tourner des heures (modèle en
+                # cours de téléchargement, disque plein…), inutile de noyer le Centre de
+                # notifications. L'état reste visible dans le menu et dans le log.
+                if not notified:
+                    _notify("Modèle indisponible", f"LocalFlow réessaie en boucle — {exc}")
+                    notified = True
+                _on_main(lambda d=delay: setattr(self.item_status, "title", f"⚠️ Modèle : nouvel essai dans {d}s"))
                 time.sleep(delay)
                 delay = min(delay * 2, 60)
 
@@ -385,8 +372,6 @@ class LocalFlowApp(rumps.App):
 
         _on_main(ready)
         _log(f"démarrage: moteur {self.transcriber.name} chargé, prêt")
-        if self.config.live_enabled and self.parakeet is None:
-            self._jobs.put(("load_parakeet", None))
 
         # Qwen se charge après le « prêt » : la première dictée n'attend pas.
         if self.config.cleanup_enabled:
@@ -402,9 +387,6 @@ class LocalFlowApp(rumps.App):
                     continue
                 if kind == "preload":
                     self.cleaner.preload()
-                elif kind == "load_parakeet":
-                    if self.parakeet is None:
-                        self._load_parakeet()
                 elif kind == "audio":
                     self._process(payload)
             except Exception:
@@ -412,7 +394,7 @@ class LocalFlowApp(rumps.App):
                 self._busy = False
 
     def _keep_warm(self):
-        """Garde les poids de Whisper « chauds » : sous pression mémoire (swap), macOS expulse
+        """Garde les poids de Qwen3-ASR « chauds » : sous pression mémoire (swap), macOS expulse
         les pages inutilisées et la dictée suivante met 5–15 s à les recharger."""
         if self.recorder.recording or self._busy or self.meeting_rec.active:
             return
@@ -426,32 +408,44 @@ class LocalFlowApp(rumps.App):
         except Exception:
             pass
 
-    def _load_parakeet(self):
-        """Charge Parakeet (une fois) et chauffe le mode direct. Retourne l'instance."""
-        from .transcribe import StreamSession, Transcriber
-        import numpy as np
+    # ---------- estimation du temps de décodage ----------
 
-        if self.parakeet is None:
-            t = Transcriber()
-            t.transcribe(np.zeros(SAMPLE_RATE // 2, dtype=np.float32))
-            s = StreamSession(t)
-            s.feed(np.zeros(SAMPLE_RATE, dtype=np.float32))
-            s.finish()
-            self.parakeet = t
-            _log("Parakeet chargé")
-        return self.parakeet
+    # Le décodage suit de près une droite : un coût fixe (mel + encodeur) plus un
+    # coût proportionnel à la durée. Mesuré au départ sur ce Mac ; ces deux valeurs
+    # ne servent que tant qu'on n'a pas assez de vraies dictées pour les remplacer.
+    DECODE_A0, DECODE_B0 = 0.15, 0.12
+    DECODE_SAMPLES = 24        # fenêtre glissante
+    DECODE_MIN_FIT = 5         # en dessous, une régression ne vaut rien
 
-    def _set_engine(self, key):
-        if key == self.config.engine:
-            return
-        self.config.engine = key
-        for k, it in self._engine_items.items():
-            it.state = k == key
-        msg = "Le modèle (~3 Go) sera téléchargé au redémarrage." if key == "whisper-max" else "Pris en compte au redémarrage."
-        _notify("Moteur", msg + " Relance : menu Quitter (relance automatique).")
+    def _decode_estimate(self, audio_s):
+        """Durée de décodage attendue, en secondes, pour `audio_s` d'audio."""
+        a, b = self.DECODE_A0, self.DECODE_B0
+        pts = [p for p in self.config.data.get("decode_times", []) if len(p) == 2]
+        if len(pts) >= self.DECODE_MIN_FIT:
+            n = len(pts)
+            sx = sum(p[0] for p in pts)
+            sy = sum(p[1] for p in pts)
+            sxx = sum(p[0] * p[0] for p in pts)
+            sxy = sum(p[0] * p[1] for p in pts)
+            den = n * sxx - sx * sx
+            if den > 1e-6:
+                nb = (n * sxy - sx * sy) / den
+                na = (sy - nb * sx) / n
+                if nb > 0.01:            # une pente nulle ou négative = données aberrantes
+                    a, b = max(0.0, na), nb
+        return max(0.30, a + b * audio_s)
+
+    def _record_decode_time(self, audio_s, elapsed):
+        """Mémorise (durée audio, temps réel) pour affiner les prochaines estimations."""
+        if audio_s <= 0.2 or not (0.05 <= elapsed <= 120):
+            return                       # dictée minuscule, ou Mac qui dormait : inexploitable
+        pts = [p for p in self.config.data.get("decode_times", []) if len(p) == 2]
+        pts.append([round(audio_s, 2), round(elapsed, 3)])
+        self.config.data["decode_times"] = pts[-self.DECODE_SAMPLES:]
+        self.config.save()
 
     def _asr_prompt(self):
-        """Contexte passé à Whisper : dictionnaire + corrections apprises."""
+        """Contexte passé à Qwen3-ASR : dictionnaire + corrections apprises."""
         words = list(self.dictionary.words) + list(self.learner.active().values())
         return ", ".join(dict.fromkeys(words)) + "." if words else ""
 
@@ -497,6 +491,7 @@ class LocalFlowApp(rumps.App):
         if self.hands_free or not self.recorder.recording:
             return
         self.hands_free = True
+        self.overlay.rec_hands_free = True   # le chrono passe en violet : ça continue sans toi
         self._suppress_next_release = True
         self._cancel_start_sound_timer()
         self._play(SOUND_START)
@@ -637,9 +632,7 @@ class LocalFlowApp(rumps.App):
 
     def _start_recording(self):
         self._ctx_app = frontmost_app()
-        live = self.config.live_enabled and self.parakeet is not None
-        if self.config.live_enabled and self.parakeet is None:
-            self._jobs.put(("load_parakeet", None))
+        live = self.config.live_enabled and self.transcriber is not None
         try:
             self.recorder.start(live=live)
         except Exception as exc:
@@ -648,6 +641,7 @@ class LocalFlowApp(rumps.App):
             return
         self._record_start = time.time()
         self.title = ICON_RECORDING
+        self.overlay.begin_recording(hands_free=self.hands_free)
         self.overlay.show("recording")
         if live:
             self._live = _LiveRun()
@@ -670,8 +664,8 @@ class LocalFlowApp(rumps.App):
         session = None
         last_shown = ""
         try:
-            session = StreamSession(self.parakeet)
-            while True:
+            session = StreamSession(self.transcriber, context=self._asr_prompt())
+            while not run.abort:
                 chunk = q.get()
                 if chunk is None:
                     break
@@ -687,14 +681,18 @@ class LocalFlowApp(rumps.App):
                 except queue.Empty:
                     pass
                 import numpy as np
-                session.feed(np.concatenate(parts))
+                # Le direct et la dictée finale partagent une seule Session Qwen3-ASR :
+                # on sérialise chaque appel MLX, sinon les deux threads se marchent dessus.
+                with self.model_lock:
+                    session.feed(np.concatenate(parts))
                 if session.text != last_shown:
                     last_shown = session.text
                     _on_main(lambda t=last_shown: self.overlay.set_text(t))
             if run.abort:
                 session.abort()
             else:
-                run.text = session.finish()
+                with self.model_lock:
+                    run.text = session.finish()
         except Exception:
             _log("erreur direct (on retombera sur la transcription complète):\n" + traceback.format_exc())
             if session is not None:
@@ -746,6 +744,7 @@ class LocalFlowApp(rumps.App):
         _log(f"audio {len(audio)/SAMPLE_RATE:.2f}s (voix {voiced:.1f}s, gain {self.recorder.gain_db:+.0f} dB) → transcription")
         self.title = ICON_PROCESSING
         self.overlay.show("processing")
+        self.overlay.begin_progress(self._decode_estimate(len(audio) / SAMPLE_RATE))
         self._busy = True
         self._busy_since = time.time()
         self._jobs.put(("audio", {"audio": audio, "live": self._live, "app": self._ctx_app, "voiced": voiced}))
@@ -781,9 +780,18 @@ class LocalFlowApp(rumps.App):
                 text = live.text
                 source = "direct"
             else:
+                if live is not None and not live.done.is_set():
+                    # Le direct traîne : on le coupe avant de reprendre le modèle à notre compte.
+                    live.abort = True
+                    live.done.wait(LIVE_JOIN_S)
                 with self.model_lock:
+                    t_dec = time.time()
                     text = self.transcriber.transcribe(audio, prompt=self._asr_prompt())
+                    # Mesuré autour du seul décodage : le temps d'attente du direct ou
+                    # du verrou fausserait l'estimation des prochaines dictées.
+                    self._record_decode_time(len(audio) / SAMPLE_RATE, time.time() - t_dec)
                 source = self.transcriber.name
+            _on_main(self.overlay.end_progress)
 
             seconds = len(audio) / SAMPLE_RATE
             if text and len(text.split()) > seconds * 4.5 + 4:   # > 4,5 mots/s : impossible
@@ -884,21 +892,22 @@ class LocalFlowApp(rumps.App):
         t = self.config.stats_summary()["today"]
         hist = self.config.history
         last = hist[0]["text"] if hist else ""
-        engine = "Whisper" if self.transcriber is None or self.transcriber.name == "whisper" else "Parakeet"
         return {
-            "status": f"Prêt · {engine}" if self.transcriber is not None else "Chargement…",
+            "status": "Prêt · Qwen3-ASR" if self.transcriber is not None else "Chargement…",
             "icon": ICON_PATH,
             "tiles": [
                 {"title": "Historique", "subtitle": f"{t['dictations']} dictées aujourd'hui", "color": (0.55, 0.40, 1.00),
-                 "on": True, "action": "history"},
+                 "icon": "clock.arrow.circlepath", "on": True, "action": "history"},
                 {"title": "Nettoyage IA", "subtitle": "Activé · +1 s" if self.config.cleanup_enabled else "Désactivé · instantané",
-                 "color": (0.35, 0.95, 0.55), "on": self.config.cleanup_enabled, "action": "toggle", "payload": "cleanup_enabled"},
+                 "color": (0.35, 0.95, 0.55), "icon": "wand.and.sparkles",
+                 "on": self.config.cleanup_enabled, "action": "toggle", "payload": "cleanup_enabled"},
                 {"title": "Réunion", "subtitle": (f"■ Arrêter · {_fmt_ts(self.meeting_rec.meeting.duration_s)}" if self.meeting_rec.active
-                                                  else ("Résumé en cours…" if self._meeting_busy else "Enregistrer · micro + son système")),
+                                                  else ("Résumé en cours…" if self._meeting_busy else "Micro + son système")),
                  "color": (1.00, 0.30, 0.32) if self.meeting_rec.active else (1.00, 0.62, 0.30),
+                 "icon": "stop.circle" if self.meeting_rec.active else "person.wave.2",
                  "on": self.meeting_rec.active, "action": "meeting_toggle"},
                 {"title": "Copier", "subtitle": (last[:34] + "…" if len(last) > 34 else last) if last else "Aucune dictée",
-                 "color": (0.35, 0.70, 1.00), "on": bool(last), "action": "copy_last"},
+                 "color": (0.35, 0.70, 1.00), "icon": "doc.on.doc", "on": bool(last), "action": "copy_last"},
             ],
             "stats_line": f"Aujourd'hui · {t['words']} mots · {t['dictations']} dictées · ≈ {t['saved_min']:.0f} min gagnées",
             "toggles": [
@@ -1165,11 +1174,7 @@ class LocalFlowApp(rumps.App):
 
     def _play(self, sound):
         if self.config.sounds_enabled:
-            subprocess.Popen(
-                ["afplay", "-v", "0.4", sound],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            sounds.play(sound)
 
 def main():
     if _acquire_single_instance() is None:

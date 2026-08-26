@@ -212,7 +212,7 @@ run "Téléchargement de LocalFlow" work dl || exit 1
 cd "$DEST" 2>/dev/null || { [ "$DEMO" = 1 ] || exit 1; }
 export LOCALFLOW_WIZARD=1
 run "Python et dépendances" work ./setup.sh --only-python || exit 1
-run "Modèle vocal  (~1,6 Go, le plus long)" work ./setup.sh --only-whisper || exit 1
+run "Modèle vocal  (~1,6 Go, le plus long)" work ./setup.sh --only-asr || exit 1
 [ -z "$MIN" ] && { run "Modèle de nettoyage IA  (~1 Go)" work ./setup.sh --only-qwen || exit 1; }
 run "Application + démarrage automatique" work ./setup.sh --only-app $MIN || exit 1
 

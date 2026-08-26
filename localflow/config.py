@@ -7,12 +7,12 @@ import os
 CONFIG_PATH = os.path.expanduser("~/.localflow.json")
 
 DEFAULTS = {
-    "cleanup_enabled": False,    # Qwen : +1 s ; Whisper sort déjà un texte propre
+    "cleanup_enabled": False,    # Qwen : +1 s ; Qwen3-ASR sort déjà un texte ponctué
     "sounds_enabled": True,
     "live_enabled": False,       # transcription en direct (streaming)
-    "live_paste_fast": True,     # coller le texte du direct (sinon re-transcrit en fin)
+    "live_paste_fast": False,    # coller le texte du direct : Qwen3-ASR décode par blocs et
+                                 # coupe les phrases — le batch ne met qu'~1 s, ça ne vaut plus le coup
     "tone_auto": True,           # adapter le ton à l'app active
-    "engine": "whisper",         # "whisper" (précis) ou "parakeet" (rapide)
     "auto_update": True,         # mise à jour automatique en arrière-plan
     "mic_always_on": False,      # micro ouvert en permanence (pré-roll permanent) ; sinon ouvert à la demande
     "meeting_auto_detect": True, # proposer d'enregistrer quand une app d'appel utilise le micro
@@ -20,6 +20,7 @@ DEFAULTS = {
     "meeting_language": "fr",    # "fr" / "en" / "" (auto) : langue figée pour les réunions
     "meeting_folder": "",        # vide = ~/Documents/LocalFlow Réunions
     "meeting_keep_audio": True,  # garder l'audio .m4a à côté du .md
+    "decode_times": [],          # [[durée audio s, temps de décodage s]] : calibre la barre de progression
     "history": [],               # [{"t": iso, "text": str, "app": str}], plus récent en premier
     "stats": {},                 # {"YYYY-MM-DD": {"words": n, "dictations": n, "audio_s": s}}
 }
@@ -85,15 +86,6 @@ class Config:
     meeting_summary_model = _str_prop("meeting_summary_model")
     meeting_language = _str_prop("meeting_language")
     meeting_folder = _str_prop("meeting_folder")
-
-    @property
-    def engine(self):
-        return self.data.get("engine", "whisper")
-
-    @engine.setter
-    def engine(self, value):
-        self.data["engine"] = value
-        self.save()
 
     # ---- historique ----
 

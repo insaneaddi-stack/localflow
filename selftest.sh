@@ -22,7 +22,7 @@ NAME="helper audiotap --probe";       t helpers/audiotap/audiotap --probe
 NAME="Info.plist du bundle complet";  t sh -c 'plutil -p LocalFlow.app/Contents/Info.plist | grep -q NSMicrophoneUsageDescription && plutil -p LocalFlow.app/Contents/Info.plist | grep -q NSAudioCaptureUsageDescription && test -x LocalFlow.app/Contents/Helpers/audiotap'
 NAME="signature du bundle";           t codesign --verify --deep --strict LocalFlow.app
 NAME="config : défauts + sauvegarde"; t $PY -c "
-from localflow.config import Config, DEFAULTS; c=Config(); [getattr(c,k) for k in ('cleanup_enabled','engine','meeting_summary_model','meeting_language','meeting_auto_detect')]"
+from localflow.config import Config, DEFAULTS; c=Config(); [getattr(c,k) for k in ('cleanup_enabled','meeting_summary_model','meeting_language','meeting_auto_detect')]"
 NAME="thread audio : op + timeout"; t $PY -c "
 import time
 from localflow.audio import run_audio_op, audio_stuck
@@ -45,6 +45,29 @@ s=_Segmenter('me'); out=[]
 sig=np.concatenate([np.zeros(SAMPLE_RATE), 0.2*np.sin(np.arange(SAMPLE_RATE*2)*2*np.pi*440/SAMPLE_RATE), np.zeros(SAMPLE_RATE)]).astype(np.float32)
 for i in range(0, len(sig)-BLOCK, BLOCK): out += s.feed(sig[i:i+BLOCK])
 out += s.flush(); assert len(out)==1 and 1.5 < out[0][1]-out[0][0] < 3.6, out"
+NAME="apprentissage : multi-mots, démotion, priorité"; t $PY -c "
+from localflow.learning import diff_corrections, Learner
+assert diff_corrections('On stocke ça dans meta mind depuis mars.', 'On stocke ça dans MetaMind depuis mars.') == [('meta mind', 'MetaMind')]
+assert diff_corrections('Je cherche le mail demain.', 'Je cherche le main demain.') == [('mail', 'main')]
+assert diff_corrections('Il faut absolument rappeler.', 'Il faut vraiment rappeler.') == [], 'reformulation apprise à tort'
+class C:
+    def __init__(self): self.data={'learned':{}}
+    def save(self): pass
+n=[]; L=Learner(C(), lambda t,m: n.append(m), lambda m: None)
+L.observe('mail','main'); assert not L.active()
+L.observe('mail','main'); assert L.active()=={'mail':'main'} and L.apply('le mail')=='le main'
+L.observe('mail','main'); assert len(n)==1, f'{len(n)} notifications, attendu 1'
+L.observe('main','mail'); assert not L.active(), 'démotion ratée'
+L2=Learner(C(), lambda t,m: None, lambda m: None)
+L2.observe('wispr','Wispr',force=True); L2.observe('wispr flow','Wispr Flow',force=True)
+assert L2.apply('wispr flow')=='Wispr Flow', L2.apply('wispr flow')"
+NAME="dictionnaire : casse des entrées multi-mots"; t $PY -c "
+from localflow.dictionary import Dictionary
+d=Dictionary()
+multi=[w for w in d.words if ' ' in w]
+if multi:
+    w=multi[0]
+    assert d.apply('test '+w.lower()+' fin')=='test '+w+' fin', d.apply('test '+w.lower()+' fin')"
 NAME="découpage du résumé (sections)"; t $PY -c "
 from localflow.summarize import Summarizer
 s=Summarizer.sections('## Résumé\nA\n## Décisions\n- b'); assert s['Résumé']=='A' and s['Décisions']=='- b'"
@@ -55,6 +78,25 @@ ov=Overlay(lambda:0.2, lambda:{'tiles':[{'title':'x','subtitle':'y','color':(1,0
 ov.meeting_info=lambda:{'clock':'01:23','sys_level':0.3,'offer':'Zoom'}
 for st in ('meeting','meeting_offer','expanded','recording','processing','hover','idle'):
     ov._set_state(st); ov.content_alpha=1.0; ov.cur_w,ov.cur_h,_=ov._target_size(st); ov.view.display()"
+NAME="overlay : les 42 transitions, frame par frame"; t $PY -c "
+from AppKit import NSApplication, NSMakeRect; NSApplication.sharedApplication()
+import localflow.overlay as O, itertools, time
+ov=O.Overlay(lambda:0.4, lambda:{'tiles':[],'status':'x','stats_line':'y'}, lambda a,p:None)
+ov.meeting_info=lambda:{'clock':'1:02','sys_level':0.3,'offer':'Zoom'}
+ov.wave=[0.4]*O.WAVE_COUNT; ov.rec_t0=time.time()
+S=('idle','hover','recording','processing','meeting','meeting_offer','expanded')
+# Pendant une transition la taille est interpolée : une largeur calculée par
+# soustraction peut devenir négative et faire planter drawRect_ (déjà arrivé).
+# On rejoue donc chaque paire d'états sur toute la durée, fondu croisé compris.
+for a,b in itertools.permutations(S,2):
+    aw,ah=ov._target_size(a)[:2]; bw,bh=ov._target_size(b)[:2]
+    for i in range(0,42):
+        k=i/40.0; e=O._ease(min(1.0,k))
+        x=min(1.0,max(0.0,k/0.28)); s=x*x*(3-2*x)
+        ov.prev_state,ov.state=a,b; ov.fade_out,ov.content_alpha=1-s,s
+        ov.cur_w=aw+(bw-aw)*e; ov.cur_h=ah+(bh-ah)*e; ov.cur_margin=O.MARGINS[b]
+        ov.view.setFrame_(NSMakeRect(0,0,ov.cur_w+2*O.PAD,ov.cur_h+2*O.PAD))
+        ov.view.drawRect_(ov.view.bounds())"
 NAME="fenêtres hors écran";           t $PY -c "
 from AppKit import NSApplication; NSApplication.sharedApplication()
 from localflow.meeting_window import LiveMeetingWindow, MeetingsWindow
@@ -68,12 +110,12 @@ hw=HistoryWindow.alloc().initWithConfig_notify_(Config(), lambda a,b:None); hw._
 from localflow.permissions import PermissionsWindow
 pw=PermissionsWindow.alloc().initWithIcon_('assets/icon_1024.png'); pw._build(); pw.refresh(); print('manquantes:', pw.missing())"
 if [ "$FULL" = 1 ]; then
-NAME="Whisper : transcription réelle"; t env HF_HUB_OFFLINE=1 $PY -c "
+NAME="Qwen3-ASR : transcription réelle"; t env HF_HUB_OFFLINE=1 $PY -c "
 import numpy as np, subprocess, wave, os
-from localflow.transcribe import WhisperTranscriber
+from localflow.transcribe import Transcriber
 subprocess.run(['say','-v','Thomas','-o','/tmp/lf-say.wav','--data-format=LEI16@16000','Bonjour, ceci est un test de dictée locale.'],check=True)
 w=wave.open('/tmp/lf-say.wav'); a=np.frombuffer(w.readframes(w.getnframes()),np.int16).astype(np.float32)/32768
-t=WhisperTranscriber('whisper').transcribe(a, language='fr'); print(t); assert 'test' in t.lower() and 'dict' in t.lower()"
+t=Transcriber().transcribe(a, language='fr'); print(t); assert 'test' in t.lower() and 'dict' in t.lower()"
 NAME="Qwen : résumé de réunion";      t env HF_HUB_OFFLINE=1 $PY -c "
 from localflow.summarize import Summarizer
 md=Summarizer('qwen-1.7b').summarize('Moi : on valide le budget de 30 000 euros pour septembre.\nEux : ok, César envoie la maquette vendredi.', notes='- budget')

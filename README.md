@@ -11,7 +11,7 @@ curl -fsSL https://raw.githubusercontent.com/insaneaddi-stack/localflow/main/ins
 
 Ça installe dans `~/Applications/LocalFlow`, télécharge les modèles (~2,6 Go, une seule fois) et lance l'app.
 Sans git ni Homebrew : s'il n'y a pas de Python 3.10+, `uv` en installe un tout seul.
-Version légère (sans nettoyage IA, ~1,6 Go) : ajoute `-s -- --minimal` à la fin de la commande.
+Version légère (sans nettoyage IA ni résumés, ~1,6 Go) : ajoute `-s -- --minimal` à la fin de la commande.
 
 **Une fois, à la fin de l'installation**, LocalFlow affiche une fenêtre **Autorisations** : clique *Autoriser* pour l'Accessibilité (active l'interrupteur dans les Réglages qui s'ouvrent) puis pour le Micro. La fenêtre se ferme toute seule quand c'est fait. L'app est signée avec un certificat local stable (`sign-identity.sh`, créé à l'installation — macOS demande ton mot de passe une fois) : les autorisations survivent aux mises à jour.
 
@@ -43,8 +43,8 @@ LocalFlow enregistre aussi tes réunions, **sans bot et sans cloud** (dans l'esp
 
 Autorisation supplémentaire, une fois : **Enregistrement de l'écran et audio système → LocalFlow** (demandée à la première réunion ; sans elle, le son de l'appel est muet et LocalFlow te le dit).
 
-- **Moteur** (menu 🎙 → Moteur) : Équilibré = Whisper large-v3-turbo (~0,7 s) · Précision max = Whisper large-v3 (~2 s, 3 Go, téléchargé à la demande) · Rapide = Parakeet (~0,4 s).
-- **Fiabilité** : prompt de style + dictionnaire donnés à Whisper, repli automatique en température, seconde passe en contexte complet si la sortie semble tronquée, passe-haut 80 Hz + gain automatique ; les 5 derniers enregistrements sont gardés dans `~/Library/Caches/LocalFlow/` pour diagnostiquer.
+- **Moteur** : Qwen3-ASR 1.7B en 4 bits (MLX, ~1,6 Go). ASR bâti sur un LLM : il ponctue seul, détecte la langue, et sert aussi la transcription en direct et les réunions — un seul modèle en mémoire.
+- **Fiabilité** : dictionnaire et corrections apprises injectés en contexte de biasing, seconde passe si la sortie semble tronquée ou part en boucle, passe-haut 80 Hz + gain automatique ; les 5 derniers enregistrements sont gardés dans `~/Library/Caches/LocalFlow/` pour diagnostiquer.
 - **Dictionnaire** : menu 🎙 → Dictionnaire… (`~/.localflow.dict.txt`) — noms propres respectés, `mauvais -> bon`.
 - **Apprentissage** : si tu corriges à la main un mot collé, LocalFlow le remarque ; vu 2 fois, il l'applique.
 - **Gain automatique** : fonctionne même en parlant loin du Mac.

@@ -12,7 +12,7 @@ Architecture (tout en threads, rien ne bloque l'UI ni la dictée) :
   un silence de 0,7 s, ou 30 s max (coupé au dernier creux). Transcrit en ~1–2 s.
 - Anti-écho : sur haut-parleurs, le micro entend aussi « eux ». Si l'enveloppe du micro
   suit celle du système (corrélation > 0,6), le tour micro est ignoré.
-- Le modèle Whisper est partagé avec la dictée via `model_lock` : la dictée attend au
+- Le modèle Qwen3-ASR est partagé avec la dictée via `model_lock` : la dictée attend au
   pire un segment (≈ 1–2 s).
 """
 
@@ -192,7 +192,6 @@ class MeetingRecorder:
         self.mic_error = ""
         self.tap_warning = ""
         self._tap_restarts = 0
-        self._last_text = {"me": "", "them": ""}
 
     # ---- démarrage ----
 
@@ -208,7 +207,6 @@ class MeetingRecorder:
         self._stop_evt.clear()
         self._written = {"me": 0, "them": 0}
         self._seg = {"me": _Segmenter("me"), "them": _Segmenter("them")}
-        self._last_text = {"me": "", "them": ""}
         self._tap_restarts = 0
         self.tap_warning = ""
         self.mic_error = ""
@@ -395,18 +393,19 @@ class MeetingRecorder:
                 peak = float(np.max(np.abs(audio)) or 1.0)
                 if peak < 0.3:
                     audio = audio * (0.5 / peak)
-                # contexte : dictionnaire + fin du tour précédent du même locuteur (continuité)
-                prev = self._last_text.get(who, "")
-                prompt = (self._prompt() + " " + prev[-200:]).strip()
+                # Contexte : dictionnaire seul. On y ajoutait la fin du tour précédent
+                # (astuce initial_prompt de Whisper), mais Qwen3-ASR attend là des TERMES
+                # de vocabulaire, pas de la prose : une phrase tronquée n'y apporte aucune
+                # continuité et pousse le modèle à la prolonger.
+                prompt = self._prompt()
                 with self._lock:
                     try:
                         text = self._transcribe(audio, prompt, self.language).strip()
-                    except TypeError:   # moteur sans paramètre de langue (Parakeet)
+                    except TypeError:   # moteur sans paramètre de langue
                         text = self._transcribe(audio, prompt).strip()
                 secs = t1 - t0
                 if not text or _is_hallucination(text) or len(text.split()) > secs * 4.5 + 4:
                     continue
-                self._last_text[who] = text
                 seg = {"t0": round(t0, 2), "t1": round(t1, 2), "who": who, "text": text}
                 self.meeting.segments.append(seg)
                 self._on_segment(seg)
