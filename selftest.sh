@@ -45,22 +45,32 @@ s=_Segmenter('me'); out=[]
 sig=np.concatenate([np.zeros(SAMPLE_RATE), 0.2*np.sin(np.arange(SAMPLE_RATE*2)*2*np.pi*440/SAMPLE_RATE), np.zeros(SAMPLE_RATE)]).astype(np.float32)
 for i in range(0, len(sig)-BLOCK, BLOCK): out += s.feed(sig[i:i+BLOCK])
 out += s.flush(); assert len(out)==1 and 1.5 < out[0][1]-out[0][0] < 3.6, out"
-NAME="détection réunion : par processus, pas par app lancée"; t $PY -c "
+NAME="détection réunion : cycle complet (proposer → fin auto)"; t $PY -c "
 import os, time, sounddevice as sd
-from localflow.meeting_detect import _capturing_pids, capturing_apps, MeetingDetector, CALL_APPS
-pids = _capturing_pids()
-assert pids is not None, 'énumération des processus audio indisponible'
-# Le piège d'origine : running_call_app() renvoyait n'importe quelle app d'appier LANCÉE
-# (WhatsApp, Slack…), d'où des propositions permanentes sans le moindre appel.
-st = sd.InputStream(samplerate=16000, channels=1); st.start(); time.sleep(0.8)
-during = _capturing_pids(); apps = capturing_apps()
+import localflow.meeting_detect as M
+assert M._capturing_pids() is not None, 'énumération des processus audio indisponible'
+assert M._match('com.google.Chrome.helper') == 'Chrome', 'processus auxiliaire non rattaché'
+assert M._match('com.apple.corespeechd') == '', 'corespeechd ne doit pas déclencher'
+# On se fait passer pour une app d'appel : seule façon de jouer le cycle sans appeler.
+M.CALL_APPS['org.python.python'] = 'FauxAppel'
+_orig = M.capturing_apps
+M.capturing_apps = lambda exclude_self=True: _orig(exclude_self=False)
+M.MIC_BUSY_START_S, M.APP_GONE_END_S = 1.0, 2.0
+d = M.MeetingDetector()
+assert d.poll() is None, 'ne doit rien proposer sans capture'
+st = sd.InputStream(samplerate=16000, channels=1); st.start()
+assert d.poll() is None, 'ne doit pas proposer avant le seuil'
+time.sleep(1.3)
+# Le chrono ne doit repartir que si l'app change : le comparer à self.offered le
+# remettait à zéro à chaque tour, et plus aucune proposition ne partait.
+r = d.poll(); assert r == ('offer','FauxAppel'), f'proposition attendue, obtenu {r}'
+assert d.poll() is None, 'ne doit pas re-proposer en boucle'
+d.began('FauxAppel')
+assert d.poll(recording=True) is None, 'ne doit pas terminer pendant la capture'
 st.stop(); st.close()
-assert os.getpid() in during, 'notre capture devrait être vue'
-assert all(b != \"\" for _, b in apps), apps
-assert not any(b == 'org.python.python' for _, b in apps), 'notre propre capture doit être exclue'
-d = MeetingDetector(); assert d.poll() is None, 'ne doit rien proposer sans appel'
-time.sleep(0.3)
-assert d.poll() is None"
+assert d.poll(recording=True) is None, 'délai de grâce non respecté'
+time.sleep(2.4)
+r = d.poll(recording=True); assert r and r[0] == 'ended', f'fin auto attendue, obtenu {r}'"
 NAME="apprentissage : multi-mots, démotion, priorité"; t $PY -c "
 from localflow.learning import diff_corrections, Learner
 assert diff_corrections('On stocke ça dans meta mind depuis mars.', 'On stocke ça dans MetaMind depuis mars.') == [('meta mind', 'MetaMind')]

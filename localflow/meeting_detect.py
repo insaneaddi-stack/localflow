@@ -59,11 +59,31 @@ def _fourcc(s):
 
 # ---- qui capture le micro, exactement ----
 
-def _capturing_pids():
-    """PID des processus qui capturent l'entrée audio en ce moment.
+def _cfstring_to_str(ca, ctypes, ref):
+    """CFStringRef (possédé par nous) → str, puis libération."""
+    try:
+        cf = ctypes.cdll.LoadLibrary(ctypes.util.find_library("CoreFoundation"))
+        cf.CFStringGetCString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_long, ctypes.c_uint32]
+        buf = ctypes.create_string_buffer(512)
+        ok = cf.CFStringGetCString(ref, buf, 512, 0x08000100)   # kCFStringEncodingUTF8
+        return buf.value.decode("utf-8", "replace") if ok else ""
+    except Exception:
+        return ""
+    finally:
+        try:
+            cf.CFRelease(ctypes.c_void_p(ref))
+        except Exception:
+            pass
+
+
+def _capturing(want_bundles=False):
+    """Processus qui capturent l'entrée audio : liste de PID, ou de (pid, bundle).
 
     kAudioHardwarePropertyProcessObjectList ('prs#') énumère les objets processus ;
-    kAudioProcessPropertyIsRunningInput ('piri') dit lesquels capturent l'entrée.
+    kAudioProcessPropertyIsRunningInput ('piri') dit lesquels capturent l'entrée ;
+    kAudioProcessPropertyBundleID ('pbid') donne le bundle — y compris pour un
+    processus auxiliaire absent de NSWorkspace.runningApplications(), qui ne liste
+    que les apps graphiques.
     Renvoie None si l'API n'est pas exploitable — l'appelant retombe sur l'ancien test.
     """
     try:
@@ -96,42 +116,63 @@ def _capturing_pids():
             sz = ctypes.c_uint32(4)
             if ca.AudioObjectGetPropertyData(obj, ctypes.byref(a), 0, None, ctypes.byref(sz), ctypes.byref(pid)):
                 continue
-            out.append(int(pid.value))
+            if not want_bundles:
+                out.append(int(pid.value))
+                continue
+            a = Addr(_fourcc("pbid"), glob, 0)
+            ref = ctypes.c_void_p()
+            sz = ctypes.c_uint32(ctypes.sizeof(ctypes.c_void_p))
+            bid = ""
+            if ca.AudioObjectGetPropertyData(obj, ctypes.byref(a), 0, None, ctypes.byref(sz), ctypes.byref(ref)) == 0 and ref.value:
+                bid = _cfstring_to_str(ca, ctypes, ref.value)
+            out.append((int(pid.value), bid))
         return out
     except Exception:
         return None
 
 
+def _capturing_pids():
+    return _capturing(want_bundles=False)
+
+
+def _match(bundle):
+    """Bundle → nom d'app connue. Gère les processus auxiliaires.
+
+    Chrome capture via « com.google.Chrome.helper », Electron via des bundles
+    dérivés : une comparaison stricte les manquerait tous. On accepte donc aussi
+    un bundle qui commence par celui d'une app connue.
+    """
+    if not bundle:
+        return ""
+    for table in (CALL_APPS, BROWSERS):
+        if bundle in table:
+            return table[bundle]
+    for table in (CALL_APPS, BROWSERS):
+        for known, name in table.items():
+            if bundle.startswith(known + "."):
+                return name
+    return ""
+
+
 def capturing_apps(exclude_self=True):
     """[(nom, bundle)] des apps connues qui capturent le micro. None si indéterminable.
 
-    Le PID vient de CoreAudio, le bundle de NSRunningApplication : on évite ainsi de
-    gérer la durée de vie d'un CFString renvoyé par AudioObjectGetPropertyData.
+    PID et bundle viennent tous deux de CoreAudio : NSWorkspace ne liste que les apps
+    graphiques et manquait donc les processus auxiliaires (Chrome helper, Electron).
     """
-    pids = _capturing_pids()
-    if pids is None:
+    procs = _capturing(want_bundles=True)
+    if procs is None:
         return None
-    if exclude_self:
-        me = os.getpid()
-        pids = [p for p in pids if p != me]
-    if not pids:
-        return []
-    try:
-        from AppKit import NSWorkspace
-
-        by_pid = {}
-        for app in NSWorkspace.sharedWorkspace().runningApplications():
-            by_pid[int(app.processIdentifier())] = app.bundleIdentifier() or ""
-    except Exception:
-        return None
+    me = os.getpid()
     out = []
-    for p in pids:
-        bid = by_pid.get(p, "")
-        if not bid:
+    seen = set()
+    for pid, bundle in procs:
+        if exclude_self and pid == me:
             continue
-        name = CALL_APPS.get(bid) or BROWSERS.get(bid)
-        if name:
-            out.append((name, bid))
+        name = _match(bundle)
+        if name and name not in seen:
+            seen.add(name)
+            out.append((name, bundle))
     return out
 
 def mic_in_use():
@@ -204,6 +245,7 @@ class MeetingDetector:
 
     def __init__(self):
         self.busy_since = None
+        self.busy_bid = None     # app dont on chronomètre la capture
         self.free_since = None
         self.declined = {}       # bundle → instant du refus
         self.offered = None      # bundle proposé en ce moment
@@ -226,7 +268,7 @@ class MeetingDetector:
             found = legacy if (legacy and (not app_name or legacy[0] == app_name)) else None
         self.start_app = found
         self.gone_since = None
-        self.busy_since = self.free_since = None
+        self.busy_since = self.free_since = self.busy_bid = None
         self.offered = None
 
     def poll(self, ignore_mic=False, recording=False):
@@ -241,11 +283,16 @@ class MeetingDetector:
         # détection reste fiable pendant qu'on dicte.
         if not caps:
             self.busy_since = None
+            self.busy_bid = None
             self.offered = None
             return None
         name, bid = caps[0]
-        if self.busy_since is None or self.offered != bid:
+        # Le chrono ne repart QUE si l'app qui capture change. Le comparer à
+        # `self.offered` le remettait à zéro à chaque tour tant qu'on n'avait pas
+        # proposé — le seuil n'était donc jamais atteint et rien ne partait jamais.
+        if self.busy_since is None or self.busy_bid != bid:
             self.busy_since = now
+            self.busy_bid = bid
         if now - self.busy_since < MIC_BUSY_START_S:
             return None
         if now - self.declined.get(bid, 0) < REOFFER_S or self.offered == bid:
