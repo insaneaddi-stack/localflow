@@ -28,7 +28,7 @@ from .config import Config
 from .context import frontmost_app, should_type, tone_for
 from .dictionary import DICT_PATH, Dictionary
 from .history_window import HistoryWindow
-from .hotkey import FnListener
+from .hotkey import FnListener, fn_down_now
 from .learning import Learner, parse_learn_command
 from .meeting import DEFAULT_FOLDER, MeetingIndex, MeetingRecorder, write_markdown, _fmt_ts
 from .meeting_detect import MeetingDetector
@@ -56,7 +56,9 @@ TAIL_S = 0.35            # audio conservé après le relâchement (dernier mot)
 DEBUG_WAV = os.path.expanduser("~/Library/Caches/LocalFlow/last.wav")  # dernière dictée, pour diagnostiquer
 MIN_AUDIO_S = 0.35       # ignore les enregistrements plus courts
 MIN_VOICED_S = 0.12      # seuil bas : le détecteur ne compte que les pics (silence pur = 0,00 s)
-MAX_RECORD_S = 600       # mains-libres : arrêt auto après 10 min
+MAX_RECORD_S = 600       # arrêt auto d'une dictée qui n'en finit pas (mains-libres ou fn coincé)
+FN_LOST_GRACE_S = 1.5    # délai avant de conclure que le relâchement de fn s'est perdu
+FINISH_TIMEOUT_S = 5     # au-delà, la fin de dictée est considérée coincée
 LIVE_JOIN_S = 15         # attente max du thread « direct » en fin de dictée
 
 SOUND_START = sounds.START
@@ -577,6 +579,11 @@ class LocalFlowApp(rumps.App):
                 _notify("LocalFlow redémarre", "La couche audio de macOS s'est figée : redémarrage automatique (~10 s).")
                 threading.Timer(1.2, lambda: os._exit(86)).start()
                 return
+            if self._lost_fn_release():
+                _log("santé: relâchement de fn perdu → on termine la dictée")
+                self.listener.release()   # le tap croit encore la touche enfoncée
+                self._suppress_next_release = True
+                self._finish_recording()  # on TERMINE : le texte de l'utilisateur n'est pas jeté
             if not self.recorder.recording:
                 if self.config.mic_always_on:
                     if not self.recorder.healthy():
@@ -600,12 +607,18 @@ class LocalFlowApp(rumps.App):
                 _notify("Micro coupé", "Le micro a disparu pendant la dictée (AirPods ?). Réessaie, il est rouvert.")
                 self._open_mic()
 
-            if self.hands_free and self.recorder.recording:
-                if time.time() - self._record_start > MAX_RECORD_S:
-                    _log("mains-libres: limite de durée atteinte, arrêt auto")
-                    self.hands_free = False
-                    self._finish_recording()
+            if self.recorder.recording and time.time() - self._record_start > MAX_RECORD_S:
+                _log("limite de durée atteinte, arrêt auto")
+                self.hands_free = False
+                self._suppress_next_release = True
+                self._finish_recording()
 
+            # `_finishing` ne dure normalement que TAIL_S ; s'il se coince (timer perdu,
+            # thread principal occupé), _on_fn_down refuse toute nouvelle dictée en silence.
+            if self._finishing and time.time() - getattr(self, "_finishing_since", 0) > FINISH_TIMEOUT_S:
+                _log("santé: fin de dictée coincée, déblocage forcé")
+                self._finishing = False
+                self._finish_now()
             if self._busy and time.time() - self._busy_since > BUSY_TIMEOUT_S:
                 _log("santé: pipeline coincé, déblocage forcé")
                 self._busy = False
@@ -701,6 +714,24 @@ class LocalFlowApp(rumps.App):
         finally:
             run.done.set()
 
+    def _lost_fn_release(self, now=None):
+        """Vrai si on enregistre en push-to-talk alors que fn n'est plus enfoncé.
+
+        macOS désactive parfois l'event tap tout seul (kCGEventTapDisabledByTimeout
+        / ByUserInput), et la touche peut aussi être relâchée pendant la veille : le
+        relâchement se perd et `_recording` reste à True pour toujours. Dans cet état
+        AUCUN garde-fou ne rattrapait le coup — MAX_RECORD_S ne valait que pour le
+        mains-libres, `stalled()` exige que le micro se taise (il continue à débiter),
+        la fermeture du micro et la remise à zéro de l'UI sont toutes deux conditionnées
+        à « on n'enregistre pas ». Le micro restait donc allumé indéfiniment.
+        On interroge l'état physique de la touche, qui, lui, ne se perd pas.
+        """
+        if not self.recorder.recording or self.hands_free or self._finishing:
+            return False
+        if (now or time.time()) - self._record_start < FN_LOST_GRACE_S:
+            return False
+        return not fn_down_now()
+
     def _cancel_start_sound_timer(self):
         if self._start_sound_timer is not None:
             self._start_sound_timer.cancel()
@@ -720,6 +751,7 @@ class LocalFlowApp(rumps.App):
         if self._finishing:
             return
         self._finishing = True
+        self._finishing_since = time.time()
         self._play(SOUND_STOP)
         t = threading.Timer(TAIL_S, lambda: _on_main(self._finish_now))
         t.daemon = True

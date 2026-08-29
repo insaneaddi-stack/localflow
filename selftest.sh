@@ -38,6 +38,23 @@ assert default_input_id() > 0
 r=Recorder(); r.open(); time.sleep(0.4); assert r.healthy(), 'flux mort'
 reset_portaudio(); assert not r.healthy(), 'doit détecter la fermeture'
 r.open(); time.sleep(0.4); assert r.healthy(); r.close()"
+NAME="micro : relâchement de fn perdu → dictée terminée"; t $PY -c "
+import time, types
+from localflow.hotkey import fn_down_now
+from localflow.app import LocalFlowApp
+assert isinstance(fn_down_now(), bool)
+class R:
+    def __init__(self, rec=True): self.recording = rec
+def mk(**kw):
+    d = dict(recorder=R(), hands_free=False, _finishing=False, _record_start=time.time()-30)
+    d.update(kw); return types.SimpleNamespace(**d)
+f = LocalFlowApp._lost_fn_release
+assert f(mk()) is True, 'fn relâché depuis 30 s : le micro doit être libéré'
+assert f(mk(recorder=R(False))) is False
+assert f(mk(hands_free=True)) is False
+assert f(mk(_finishing=True)) is False
+assert f(mk(_record_start=time.time())) is False, 'ne doit pas couper au démarrage'"
+
 NAME="segmenteur réunion (VAD)";      t $PY -c "
 import numpy as np
 from localflow.meeting import _Segmenter, BLOCK, SAMPLE_RATE

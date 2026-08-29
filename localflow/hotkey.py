@@ -20,6 +20,20 @@ FN_KEYCODE = 63
 SPACE_KEYCODE = 49
 FLAG_FN = Quartz.kCGEventFlagMaskSecondaryFn
 
+def fn_down_now():
+    """État PHYSIQUE de la touche fn, sans passer par le tap.
+
+    Le tap peut rater un relâchement : macOS le désactive de lui-même
+    (kCGEventTapDisabledByTimeout / ByUserInput) et la touche peut aussi être
+    relâchée pendant la veille. Le `_pressed` du listener reste alors coincé à
+    True. Cette lecture-là ne ment pas et ne demande aucune autorisation.
+    """
+    try:
+        flags = Quartz.CGEventSourceFlagsState(Quartz.kCGEventSourceStateCombinedSessionState)
+        return bool(flags & FLAG_FN)
+    except Exception:
+        return True   # dans le doute, on ne coupe pas une dictée en cours
+
 class FnListener:
     """Callbacks (appelés depuis le thread du tap — renvoyer sur le main thread) :
 
