@@ -30,6 +30,22 @@ def _as_context(prompt: str) -> str:
     return " ".join(terms).rstrip(".")[:CONTEXT_MAX]
 
 
+def _recites_context(text: str, context: str) -> bool:
+    """Vrai si la sortie n'est que le contexte de vocabulaire récité.
+
+    Mesuré : sur un tour sans parole (bruit de pièce), Qwen3-ASR en langue figée
+    recopie son contexte mot pour mot — d'où les « Noto MetaMind AURA STUDIO
+    Wispr Flow » plantés au milieu d'un transcript de réunion. On rejette toute
+    sortie d'au moins trois mots qui est une tranche continue du contexte : trois
+    termes du dictionnaire enchaînés dans l'ordre, ce n'est pas quelqu'un qui parle.
+    """
+    def words(x):
+        return re.sub(r"[^\w\s']", " ", (x or "").lower()).split()
+    out, ctx = words(text), words(context)
+    if len(out) < 3 or len(out) > len(ctx):
+        return False
+    return any(ctx[i:i + len(out)] == out for i in range(len(ctx) - len(out) + 1))
+
 def _looks_broken(text: str, seconds: float) -> str:
     """Renvoie la raison si la transcription semble tronquée/boucle, sinon ''."""
     words = text.split()
@@ -68,6 +84,8 @@ class Transcriber:
         )
         text = (result.text or "").strip()
         if len(text.split()) <= 4 and _is_hallucination(text):
+            return ""
+        if context and _recites_context(text, context):
             return ""
         return text
 

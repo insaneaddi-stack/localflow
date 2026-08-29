@@ -4,5 +4,6 @@
     <key>CFBundleIdentifier</key><string>com.louqui.localflow.audiotap</string>
     <key>CFBundleName</key><string>LocalFlow audiotap</string>
     <key>CFBundleVersion</key><string>1.0</string>
+    <key>NSMicrophoneUsageDescription</key><string>LocalFlow enregistre ta voix pendant une réunion pour la transcrire, 100 % en local.</string>
     <key>NSAudioCaptureUsageDescription</key><string>LocalFlow enregistre le son de tes réunions (Zoom, Meet, Teams…) pour les transcrire, 100 % en local.</string>
 </dict></plist>

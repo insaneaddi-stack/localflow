@@ -2,16 +2,26 @@
 au fil de l'eau par tours de parole, notes tapées, puis résumé et fichier Markdown.
 
 Architecture (tout en threads, rien ne bloque l'UI ni la dictée) :
-  mic  (sounddevice) ─┐                     ┌─ segmenteur « moi » ─┐
-                      ├─ _writer (250 ms) ──┤                      ├─ file → _transcribe_loop → segments[]
-  sys  (audiotap)    ─┘   + WAV sur disque  └─ segmenteur « eux » ─┘
 
+  audiotap --with-mic ──┐                     ┌─ segmenteur « moi » ─┐
+   (micro + système,    ├─ _writer (250 ms) ──┤                      ├─ file → _transcribe_loop
+    même IOProc)        ┘   + WAV sur disque  └─ segmenteur « eux » ─┘
+
+- Les deux pistes viennent du MÊME agrégat Core Audio, donc du même IOProc et de la
+  même horloge : elles sont alignées à l'échantillon près par construction. La version
+  précédente prenait le micro par PortAudio et le système par le helper — deux horloges
+  sans horodatage commun. Mesuré sur un vrai appel, elles dérivaient de 0,46 s à 1,48 s,
+  ce qui rendait l'anti-écho inopérant : chaque phrase de l'interlocuteur était comptée
+  deux fois, une fois en « Eux » et une fois en « Moi ».
+- Repli : si le helper ne peut pas embarquer le micro (ou ne livre rien), on rouvre le
+  micro par PortAudio et on prévient. Les deux pistes redeviennent alignées « au mieux ».
 - Les deux pistes sont écrites en continu en WAV 16 kHz dans le cache : 2 h de réunion
   ne tiennent pas en RAM, et rien n'est perdu si l'app plante.
 - Un tour de parole = voix détectée (bande 250–3500 Hz, seuil relatif au bruit) jusqu'à
   un silence de 0,7 s, ou 30 s max (coupé au dernier creux). Transcrit en ~1–2 s.
-- Anti-écho : sur haut-parleurs, le micro entend aussi « eux ». Si l'enveloppe du micro
-  suit celle du système (corrélation > 0,6), le tour micro est ignoré.
+- Anti-écho : sur haut-parleurs, le micro entend aussi « eux ». Deux filets — la
+  corrélation des enveloppes (fiable maintenant que les pistes sont alignées), et une
+  comparaison du TEXTE avec les tours « eux » voisins, qui, elle, survit à un décalage.
 - Le modèle Qwen3-ASR est partagé avec la dictée via `model_lock` : la dictée attend au
   pire un segment (≈ 1–2 s).
 """
@@ -40,6 +50,17 @@ SEG_SOFT_S = 18.0               # au-delà, on coupe au premier creux ≥ 0,3 s
 SILENCE_END_S = 1.2             # pause qui clôt un tour (plus long = phrases moins hachées)
 PREROLL_S = 0.30
 MIN_SEG_S = 0.8
+# Plancher d'énergie d'un tour. Mesuré sur un vrai appel : les tours de bruit de
+# pièce culminaient à 0,028–0,046 de crête, la parole à 0,26–0,55. On coupe dans
+# le trou. Sans ce plancher, le gain ci-dessous amplifiait le bruit jusqu'à 18×
+# et le modèle rendait n'importe quoi (souvent le dictionnaire récité).
+SEG_MIN_PEAK = 0.08
+SEG_MAX_GAIN = 6.0
+ECHO_CORR = 0.6                 # corrélation d'enveloppe au-delà de laquelle « moi » n'est qu'un écho
+ECHO_LAG_BLOCKS = 8             # ±160 ms : suffisant quand les pistes viennent du même IOProc
+ECHO_TEXT_RATIO = 0.7           # ressemblance de texte au-delà de laquelle le tour micro est un doublon
+ECHO_TEXT_WINDOW_S = 4.0        # fenêtre où l'on cherche le tour « eux » correspondant
+DUAL_GRACE_S = 3.0              # délai laissé au helper pour livrer ses premiers échantillons
 VAD_MIN_ABS = 0.0012
 VAD_FLOOR_RATIO = 2.5
 _VAD_BINS = slice(5, 70)        # FFT 320 pts @16 kHz : 50 Hz/bin → 250–3500 Hz
@@ -91,9 +112,11 @@ class _Segmenter:
                 self.pre.pop(0)
             if speaking:
                 self.voiced = True
+                # `self.pre` contient DÉJÀ le bloc courant (ajouté juste au-dessus) :
+                # le ré-ajouter dupliquait 20 ms au début de chaque tour et décalait
+                # l'horodatage — d'où le « t0 = -0,02 s » vu dans un vrai transcript.
                 self.buf = list(self.pre)
-                self.buf_start = self.samples - sum(len(b) for b in self.pre)
-                self.buf.append(block)
+                self.buf_start = self.samples + n - sum(len(b) for b in self.buf)
                 self.silence = 0.0
                 self.cut_candidate = None
         else:
@@ -178,6 +201,7 @@ class MeetingRecorder:
         self._on_error = on_error or (lambda msg: None)
         self.meeting = None
         self.active = False
+        self.dual = False        # micro + système par le même agrégat Core Audio
         self._stop_evt = threading.Event()
         self._mic = None
         self._mic_q = queue.Queue()
@@ -214,27 +238,24 @@ class MeetingRecorder:
             w = wave.open(os.path.join(m.dir, f"{who}.wav"), "wb")
             w.setnchannels(1); w.setsampwidth(2); w.setframerate(SAMPLE_RATE)
             self._wav[who] = w
-        # micro : flux indépendant de la dictée
-        from .audio import open_input_stream
+        # Micro ET son système par le même agrégat Core Audio : c'est ce qui garantit
+        # l'alignement des deux pistes. Le micro PortAudio n'est ouvert qu'en repli.
         self._mic_q = queue.Queue()
-        try:
-            self._mic = open_input_stream(samplerate=SAMPLE_RATE, channels=1, dtype="float32",
-                                          blocksize=BLOCK, callback=self._mic_cb)
-        except Exception as exc:
-            self.mic_error = str(exc)
-            self._log(f"réunion : micro indisponible ({exc})")
-            self._mic = None
-        # son système
+        self._mic = None
         self._tap = None
+        self.dual = False
         if available():
             try:
-                self._tap = SystemAudioTap(self._log)
+                self._tap = SystemAudioTap(self._log, with_mic=True)
                 self._tap.start()
+                self.dual = True
             except Exception as exc:
                 self._log(f"réunion : son système indisponible ({exc})")
                 self.tap_warning = "Son système indisponible"
         else:
             self.tap_warning = "Son système : macOS 14.2+ requis"
+        if not self.dual:
+            self._open_mic()
         self.active = True
         self._threads = [
             threading.Thread(target=self._writer, daemon=True),
@@ -245,6 +266,45 @@ class MeetingRecorder:
         self._save_state()
         self._log(f"réunion démarrée ({mid}, app {app or '?'})")
         return m
+
+    def _open_mic(self):
+        """Micro par PortAudio — uniquement quand le helper ne peut pas le fournir."""
+        from .audio import open_input_stream
+        try:
+            self._mic = open_input_stream(samplerate=SAMPLE_RATE, channels=1, dtype="float32",
+                                          blocksize=BLOCK, callback=self._mic_cb)
+            self.mic_error = ""
+        except Exception as exc:
+            self.mic_error = str(exc)
+            self._log(f"réunion : micro indisponible ({exc})")
+            self._mic = None
+
+    def _fallback_to_portaudio(self, why):
+        """Le helper ne fournit pas le micro : on repasse au montage à deux horloges.
+
+        Moins bon (les pistes peuvent dériver, donc l'anti-écho par corrélation devient
+        peu fiable) mais il vaut mieux une réunion imparfaite qu'une piste « Moi » vide.
+        Le filet anti-doublon par le texte, lui, continue de fonctionner.
+        """
+        if not self.dual:
+            return
+        self.dual = False
+        self._log(f"réunion : micro non fourni par le helper ({why}) → repli PortAudio")
+        from .sysaudio import SystemAudioTap
+        try:
+            if self._tap is not None:
+                self._tap.stop()
+        except Exception:
+            pass
+        self._tap = None
+        try:
+            tap = SystemAudioTap(self._log)      # mono, système seul
+            tap.start()
+            self._tap = tap
+        except Exception as exc:
+            self._log(f"réunion : relance du tap impossible ({exc})")
+            self.tap_warning = "Son système indisponible"
+        self._open_mic()
 
     def _mic_cb(self, indata, frames, t, status):
         self._mic_q.put(indata[:, 0].astype(np.float32).copy())
@@ -261,7 +321,7 @@ class MeetingRecorder:
             time.sleep(0.25)
             try:
                 # micro mort (périphérique changé, PortAudio réinitialisé) → réouverture
-                if self._mic is not None and (not self._mic.active or time.time() - last_mic > 3.0):
+                if not self.dual and self._mic is not None and (not self._mic.active or time.time() - last_mic > 3.0):
                     from .audio import close_input_stream, open_input_stream
                     close_input_stream(self._mic)
                     self._mic = None
@@ -272,40 +332,71 @@ class MeetingRecorder:
                         self._log("réunion : micro rouvert")
                     except Exception as exc:
                         self._log(f"réunion : micro perdu ({exc})")
-                # micro
-                parts = []
-                while True:
-                    try:
-                        parts.append(self._mic_q.get_nowait())
-                    except queue.Empty:
-                        break
-                if parts:
-                    last_mic = time.time()
-                    mic = np.concatenate(parts)
+                def agc(mic):
+                    nonlocal mic_gain
                     rms = float(np.sqrt(np.mean(mic ** 2)) + 1e-9)
                     if rms > 0.002:
                         wanted = min(12.0, max(1.0, 0.06 / rms))
                         mic_gain += (wanted - mic_gain) * (0.5 if wanted < mic_gain else 0.1)
                     self.level = min(1.0, rms * mic_gain * 6.0)
-                    pending["me"] = np.concatenate([pending["me"], np.clip(mic * mic_gain, -1, 1)])
-                # système
-                if self._tap is not None:
-                    blocks = self._tap.read()
+                    return np.clip(mic * mic_gain, -1, 1)
+
+                if self.dual:
+                    # Une seule source : les deux voies arrivent dans le même bloc (n, 2),
+                    # donc `me` et `them` avancent exactement du même nombre d'échantillons.
+                    blocks = self._tap.read() if self._tap is not None else [None]
                     ended = any(b is None for b in blocks)
                     blocks = [b for b in blocks if b is not None]
                     if blocks:
-                        pending["them"] = np.concatenate([pending["them"]] + blocks)
-                        last_sys = time.time()
-                    self.sys_level = self._tap.level
-                    if ended or not self._tap.running:
-                        self._restart_tap()
-                    if self._tap is not None and self._tap.silent_s > 20 and self._tap.samples > 0 and not self.tap_warning:
+                        arr = np.concatenate(blocks)
+                        pending["me"] = np.concatenate([pending["me"], agc(arr[:, 0])])
+                        pending["them"] = np.concatenate([pending["them"], arr[:, 1]])
+                        last_mic = last_sys = time.time()
+                    if self._tap is not None:
+                        self.sys_level = self._tap.level
+                        if self._tap.mic_missing:
+                            self._fallback_to_portaudio("mic-missing")
+                        elif ended or not self._tap.running:
+                            self._restart_tap()
+                        elif self._tap.stalled(grace=DUAL_GRACE_S):
+                            self._restart_tap()
+                    else:
+                        self._fallback_to_portaudio("helper absent")
+                else:
+                    parts = []
+                    while True:
+                        try:
+                            parts.append(self._mic_q.get_nowait())
+                        except queue.Empty:
+                            break
+                    if parts:
+                        last_mic = time.time()
+                        pending["me"] = np.concatenate([pending["me"], agc(np.concatenate(parts))])
+                    if self._tap is not None:
+                        blocks = self._tap.read()
+                        ended = any(b is None for b in blocks)
+                        blocks = [b for b in blocks if b is not None]
+                        if blocks:
+                            pending["them"] = np.concatenate([pending["them"]] + blocks)
+                            last_sys = time.time()
+                        self.sys_level = self._tap.level
+                        if ended or not self._tap.running:
+                            self._restart_tap()
+                    # aligne « eux » sur « moi » si le tap a décroché (comble par du silence)
+                    gap = (self._written["me"] + len(pending["me"])) - (self._written["them"] + len(pending["them"]))
+                    if gap > SAMPLE_RATE * 2 and time.time() - last_sys > 1.5:
+                        pending["them"] = np.concatenate([pending["them"], np.zeros(int(gap), np.float32)])
+                # Le tap peut être ACCEPTÉ et pourtant ne jamais livrer un échantillon
+                # (IOProc de l'agrégat qui ne se déclenche pas). `silent_s` ne le voyait
+                # pas : il ne compte que les blocs reçus, et il n'en arrivait aucun.
+                if self._tap is not None and not self.tap_warning:
+                    if self._tap.samples == 0 and time.time() - self._tap.started_at > 15:
+                        self.tap_warning = ("Son système absent : aucun échantillon reçu. "
+                                            "Redémarre le Mac (Core Audio bloqué) ou vérifie l'autorisation.")
+                        self._log("réunion : le tap ne livre aucun échantillon depuis 15 s")
+                    elif self._tap.silent_s > 20 and self._tap.samples > 0:
                         self.tap_warning = "Son système muet : vérifie l'autorisation « Enregistrement audio système »"
                         self._log("réunion : tap silencieux > 20 s (autorisation ?)")
-                # aligne « eux » sur « moi » si le tap a décroché (comble par du silence)
-                gap = (self._written["me"] + len(pending["me"])) - (self._written["them"] + len(pending["them"]))
-                if gap > SAMPLE_RATE * 2 and time.time() - last_sys > 1.5:
-                    pending["them"] = np.concatenate([pending["them"], np.zeros(int(gap), np.float32)])
                 # écrit + segmente par blocs de 20 ms
                 for who in ("me", "them"):
                     buf = pending[who]
@@ -343,14 +434,19 @@ class MeetingRecorder:
             self._tap = None
             return
         self._tap_restarts += 1
-        self._log(f"réunion : relance du tap (code {code}, n°{self._tap_restarts})")
+        self._log(f"réunion : relance du tap (code {code}, n°{self._tap_restarts}, dual={self.dual})")
         time.sleep(0.3)
         try:
-            self._tap = SystemAudioTap(self._log)
+            self._tap = SystemAudioTap(self._log, with_mic=self.dual)
             self._tap.start()
         except Exception as exc:
             self._log(f"réunion : relance du tap impossible ({exc})")
             self._tap = None
+            return
+        # En stéréo, trois relances infructueuses de suite = le helper ne fournira pas
+        # le micro : on bascule plutôt que de laisser la piste « Moi » vide.
+        if self.dual and self._tap_restarts >= 3:
+            self._fallback_to_portaudio(f"{self._tap_restarts} relances sans données")
 
     # ---- anti-écho ----
 
@@ -360,7 +456,7 @@ class MeetingRecorder:
         a, b = int(t0 * SAMPLE_RATE / BLOCK), int(t1 * SAMPLE_RATE / BLOCK)
         if b - a < 15 or b > len(me):
             return False
-        lag_max = 8   # ±160 ms
+        lag_max = ECHO_LAG_BLOCKS
         best = 0.0
         x = np.array(me[a:b])
         if x.std() < 1e-9:
@@ -375,9 +471,37 @@ class MeetingRecorder:
                 continue
             y = (y - y.mean()) / y.std()
             best = max(best, float(np.mean(x * y)))
-        return best > 0.6
+        return best > ECHO_CORR
 
     # ---- transcription ----
+
+    @staticmethod
+    def _similar(a, b):
+        """Ressemblance 0–1 entre deux transcriptions (mots communs, ordre ignoré)."""
+        wa = set(re.sub(r"[^\w\s']", " ", a.lower()).split())
+        wb = set(re.sub(r"[^\w\s']", " ", b.lower()).split())
+        if not wa or not wb:
+            return 0.0
+        return len(wa & wb) / min(len(wa), len(wb))
+
+    def _echo_of_them(self, t0, t1, text):
+        """Vrai si ce tour « moi » redit ce qu'un tour « eux » voisin dit déjà.
+
+        Filet complémentaire de `_is_echo` : celui-ci compare des enveloppes et suppose
+        les pistes alignées ; celui-là compare le TEXTE et survit donc à un décalage,
+        ce qui compte sur le chemin de repli. Sans lui, chaque phrase de l'interlocuteur
+        apparaissait deux fois dans le transcript, dont une attribuée à « Moi ».
+        """
+        if len(text.split()) < 4:
+            return False               # trop court pour trancher (« ok », « d'accord »)
+        for seg in reversed(self.meeting.segments[-40:]):
+            if seg["who"] != "them":
+                continue
+            if seg["t1"] < t0 - ECHO_TEXT_WINDOW_S or seg["t0"] > t1 + ECHO_TEXT_WINDOW_S:
+                continue
+            if self._similar(text, seg["text"]) >= ECHO_TEXT_RATIO:
+                return True
+        return False
 
     def _transcribe_loop(self):
         from .transcribe import _is_hallucination
@@ -390,9 +514,13 @@ class MeetingRecorder:
                 if who == "me" and self._tap is not None and self._is_echo(t0, t1):
                     self._log(f"réunion : tour micro {_fmt_ts(t0)} ignoré (écho du son système)")
                     continue
-                peak = float(np.max(np.abs(audio)) or 1.0)
-                if peak < 0.3:
-                    audio = audio * (0.5 / peak)
+                peak = float(np.max(np.abs(audio)))
+                if peak < SEG_MIN_PEAK:
+                    self._log(f"réunion : tour {who} {_fmt_ts(t0)} ignoré (crête {peak:.3f} — pas de voix)")
+                    continue
+                gain = min(SEG_MAX_GAIN, 0.5 / peak)
+                if gain > 1.0:
+                    audio = audio * gain
                 # Contexte : dictionnaire seul. On y ajoutait la fin du tour précédent
                 # (astuce initial_prompt de Whisper), mais Qwen3-ASR attend là des TERMES
                 # de vocabulaire, pas de la prose : une phrase tronquée n'y apporte aucune
@@ -406,6 +534,9 @@ class MeetingRecorder:
                 secs = t1 - t0
                 if not text or _is_hallucination(text) or len(text.split()) > secs * 4.5 + 4:
                     continue
+                if who == "me" and self._echo_of_them(t0, t1, text):
+                    self._log(f"réunion : tour micro {_fmt_ts(t0)} ignoré (doublon de « Eux »)")
+                    continue
                 seg = {"t0": round(t0, 2), "t1": round(t1, 2), "who": who, "text": text}
                 self.meeting.segments.append(seg)
                 self._on_segment(seg)
@@ -414,6 +545,34 @@ class MeetingRecorder:
             except Exception:
                 import traceback
                 self._log("réunion : erreur transcription\n" + traceback.format_exc())
+
+    def _dedupe_echo(self):
+        """Passe finale : retire les tours « moi » qui ne font que redire un tour « eux ».
+
+        `_echo_of_them` ne regarde que les tours DÉJÀ transcrits ; or l'ordre d'arrivée
+        n'est pas garanti — sur un vrai appel, l'original « eux » arrivait tantôt avant,
+        tantôt après le doublon « moi ». Ce balayage-là est indépendant de l'ordre.
+        On ne supprime jamais un tour « eux » : le son système est la source propre de
+        l'interlocuteur, le micro n'en est que l'écho par les haut-parleurs.
+        """
+        segs = self.meeting.segments
+        them = [x for x in segs if x["who"] == "them"]
+        if not them:
+            return 0
+        drop = []
+        for x in segs:
+            if x["who"] != "me" or len(x["text"].split()) < 4:
+                continue
+            for y in them:
+                if y["t1"] < x["t0"] - ECHO_TEXT_WINDOW_S or y["t0"] > x["t1"] + ECHO_TEXT_WINDOW_S:
+                    continue
+                if self._similar(x["text"], y["text"]) >= ECHO_TEXT_RATIO:
+                    drop.append(id(x))
+                    break
+        if drop:
+            self.meeting.segments = [x for x in segs if id(x) not in drop]
+            self._log(f"réunion : {len(drop)} tours « moi » retirés (écho des haut-parleurs)")
+        return len(drop)
 
     def _save_state(self):
         """Sauvegarde intermédiaire (reprise possible après crash)."""
@@ -468,6 +627,7 @@ class MeetingRecorder:
                 pass
         self._wav = {}
         m.duration_s = max(self._written["me"], self._written["them"]) / SAMPLE_RATE
+        self._dedupe_echo()
         self._save_state()
         self._log(f"réunion arrêtée : {_fmt_ts(m.duration_s)}, {len(m.segments)} tours, {m.word_count()} mots")
         return m

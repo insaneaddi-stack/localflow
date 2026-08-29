@@ -8,7 +8,11 @@ cd "$(dirname "$0")"
 PY=.venv/bin/python
 FULL=0; [ "${1:-}" = "--full" ] && FULL=1
 fail=0
-t() { if "$@" >/tmp/localflow-selftest.log 2>&1; then echo "  ✅ $NAME"; else echo "  ❌ $NAME"; tail -15 /tmp/localflow-selftest.log | sed 's/^/     /'; fail=1; fi; }
+# Code 78 = « impossible de tester ici » (état système, pas une régression) : avertissement, pas échec.
+t() { if "$@" >/tmp/localflow-selftest.log 2>&1; then echo "  ✅ $NAME"; else
+        if [ $? = 78 ]; then echo "  ⚠️  $NAME"; sed 's/^/     /' /tmp/localflow-selftest.log;
+        else echo "  ❌ $NAME"; tail -15 /tmp/localflow-selftest.log | sed 's/^/     /'; fail=1; fi
+      fi; }
 
 echo "LocalFlow — auto-test"
 NAME="aucun crash macOS récent (.ips < 2 h)"; t sh -c '! find ~/Library/Logs/DiagnosticReports -maxdepth 1 -name "LocalFlow-*.ips" -mmin -120 2>/dev/null | grep . || { find ~/Library/Logs/DiagnosticReports -maxdepth 1 -name "LocalFlow-*.ips" -mmin -120 -exec basename {} \; ; false; }'
@@ -62,6 +66,37 @@ s=_Segmenter('me'); out=[]
 sig=np.concatenate([np.zeros(SAMPLE_RATE), 0.2*np.sin(np.arange(SAMPLE_RATE*2)*2*np.pi*440/SAMPLE_RATE), np.zeros(SAMPLE_RATE)]).astype(np.float32)
 for i in range(0, len(sig)-BLOCK, BLOCK): out += s.feed(sig[i:i+BLOCK])
 out += s.flush(); assert len(out)==1 and 1.5 < out[0][1]-out[0][0] < 3.6, out"
+NAME="réunion : plancher d'énergie + contexte non récité"; t $PY -c "
+from localflow.transcribe import _recites_context as R
+from localflow.meeting import SEG_MIN_PEAK, SEG_MAX_GAIN
+CTX='Noto MetaMind AURA STUDIO Wispr Flow'
+assert R('Noto MetaMind AURA STUDIO Wispr Flow.', CTX) is True, 'dictionnaire récité : à rejeter'
+assert R('MetaMind AURA STUDIO', CTX) is True
+assert R('AURA STUDIO', CTX) is False, 'deux mots : trop risqué de rejeter'
+assert R(\"J'ai bossé sur MetaMind hier soir\", CTX) is False
+assert R('AURA STUDIO Noto', CTX) is False, 'pas dans l ordre du contexte'
+# mesuré sur un vrai appel : bruit de pièce 0,028-0,046 de crête, parole 0,26-0,55
+assert 0.046 < SEG_MIN_PEAK < 0.26, SEG_MIN_PEAK
+assert SEG_MAX_GAIN <= 8.0, 'le gain ne doit plus amplifier le bruit x18'"
+
+NAME="réunion : anti-écho (les deux pistes ne se doublent pas)"; t $PY -c "
+import threading
+from localflow.meeting import MeetingRecorder
+r = MeetingRecorder(lambda a, p, l='': '', threading.Lock(), lambda m: None)
+EUX = 'Qui doivent être automatisés et qui prennent un temps fou les mecs'
+r.meeting = type('M', (), {'segments': [
+    {'t0': 0.0,  't1': 5.0,  'who': 'them', 'text': EUX},
+    {'t0': 0.24, 't1': 5.56, 'who': 'me',   'text': EUX + ' quoi'},
+    {'t0': 40.0, 't1': 45.0, 'who': 'me',   'text': EUX},
+    {'t0': 6.0,  't1': 9.0,  'who': 'me',   'text': 'Oui je suis complètement d accord avec toi'},
+]})()
+assert r._dedupe_echo() == 1, 'un seul doublon à retirer'
+kept = [s['who'] + '@' + str(s['t0']) for s in r.meeting.segments]
+assert 'me@0.24' not in kept, 'l écho des haut-parleurs doit partir'
+assert 'me@40.0' in kept, 'hors fenêtre : à garder'
+assert 'me@6.0' in kept, 'vraie prise de parole : à garder'
+assert 'them@0.0' in kept, 'on ne touche jamais à la piste système'"
+
 NAME="détection réunion : cycle complet (proposer → fin auto)"; t $PY -c "
 import os, time, sounddevice as sd
 import localflow.meeting_detect as M
@@ -73,6 +108,13 @@ M.CALL_APPS['org.python.python'] = 'FauxAppel'
 _orig = M.capturing_apps
 M.capturing_apps = lambda exclude_self=True: _orig(exclude_self=False)
 M.MIC_BUSY_START_S, M.APP_GONE_END_S = 1.0, 2.0
+# Core Audio peut se figer (plusieurs jours d'uptime) et garder « ce processus capture
+# l'entrée » collé à vrai : le cycle devient intestable, et l'app propose alors d'enregistrer
+# des réunions qui n'existent pas. On le distingue d'une vraie régression.
+if M.capturing_apps():
+    raise SystemExit(78) if not print(
+        'Core Audio est figé : il annonce une capture micro avant même qu on ouvre un flux.',
+        'Redémarre-le (sudo killall coreaudiod) ou redémarre le Mac, puis relance ce test.', sep=chr(10)) else None
 d = M.MeetingDetector()
 assert d.poll() is None, 'ne doit rien proposer sans capture'
 st = sd.InputStream(samplerate=16000, channels=1); st.start()
