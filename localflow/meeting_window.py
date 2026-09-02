@@ -53,7 +53,7 @@ from AppKit import (
 )
 from Foundation import NSObject, NSAttributedString, NSMutableAttributedString
 
-from .overlay import _attrs, _draw_text, _text_width, _white
+from .overlay import _attrs, _draw_text, _text_width, _encre
 from .paste import copy_text
 
 BG = 0.045
@@ -94,8 +94,8 @@ def _textview(frame, editable, font_size=13.0):
     tv.setRichText_(False)
     tv.setDrawsBackground_(False)
     tv.setFont_(NSFont.systemFontOfSize_(font_size))
-    tv.setTextColor_(_white(0.92))
-    tv.setInsertionPointColor_(_white(0.9))
+    tv.setTextColor_(_encre(0.92))
+    tv.setInsertionPointColor_(_encre(0.9))
     tv.setTextContainerInset_((10, 10))
     tv.setAutoresizingMask_(NSViewWidthSizable)
     tv.setVerticallyResizable_(True)
@@ -130,7 +130,7 @@ class _MeetCard(NSView):
         b = self.bounds()
         path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(0.5, 0.5, b.size.width - 1, b.size.height - 1), 16, 16)
         NSColor.colorWithCalibratedWhite_alpha_(0.06, 1.0).setFill(); path.fill()
-        _white(0.08).setStroke(); path.setLineWidth_(1.0); path.stroke()
+        _encre(0.08).setStroke(); path.setLineWidth_(1.0); path.stroke()
         if self.title:
             _rgb(self.color, 0.95).setFill()
             NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(16, b.size.height - 24, 7, 7)).fill()
@@ -235,7 +235,7 @@ class LiveMeetingWindow(NSObject):
         # bas
         self.status = NSTextField.labelWithString_("")
         self.status.setFrame_(NSMakeRect(M, 24, W - 420, 20))
-        self.status.setTextColor_(_white(0.5))
+        self.status.setTextColor_(_encre(0.5))
         self.status.setFont_(NSFont.systemFontOfSize_(11.5))
         self.status.setAutoresizingMask_(NSViewWidthSizable | NSViewMaxXMargin)
         content.addSubview_(self.status)
@@ -292,16 +292,16 @@ class LiveMeetingWindow(NSObject):
         if not segs:
             out.appendAttributedString_(NSAttributedString.alloc().initWithString_attributes_(
                 "La transcription apparaît ici quelques secondes après chaque prise de parole.\n\nMoi = ton micro · Eux = le son de l'appel.",
-                {NSFontAttributeName: NSFont.systemFontOfSize_(13), NSForegroundColorAttributeName: _white(0.4)}))
+                {NSFontAttributeName: NSFont.systemFontOfSize_(13), NSForegroundColorAttributeName: _encre(0.4)}))
         for s in segs:
             who = "Moi" if s["who"] == "me" else "Eux"
             col = _rgb(ME_COLOR if s["who"] == "me" else THEM_COLOR, 0.95)
             out.appendAttributedString_(NSAttributedString.alloc().initWithString_attributes_(
-                f"{_fmt_ts(s['t0'])}  ", {NSFontAttributeName: NSFont.monospacedDigitSystemFontOfSize_weight_(11, 0.3), NSForegroundColorAttributeName: _white(0.35)}))
+                f"{_fmt_ts(s['t0'])}  ", {NSFontAttributeName: NSFont.monospacedDigitSystemFontOfSize_weight_(11, 0.3), NSForegroundColorAttributeName: _encre(0.35)}))
             out.appendAttributedString_(NSAttributedString.alloc().initWithString_attributes_(
                 who + "\n", {NSFontAttributeName: NSFont.systemFontOfSize_weight_(12, 0.6), NSForegroundColorAttributeName: col}))
             out.appendAttributedString_(NSAttributedString.alloc().initWithString_attributes_(
-                s["text"] + "\n\n", {NSFontAttributeName: NSFont.systemFontOfSize_(13.5), NSForegroundColorAttributeName: _white(0.92)}))
+                s["text"] + "\n\n", {NSFontAttributeName: NSFont.systemFontOfSize_(13.5), NSForegroundColorAttributeName: _encre(0.92)}))
         self.transcript.textStorage().setAttributedString_(out)
         self.transcript.scrollRangeToVisible_((out.length(), 0))
 
@@ -409,7 +409,7 @@ class _MeetingList(NSView):
             sel = i == self.selected
             path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(rect, 14, 14)
             NSColor.colorWithCalibratedWhite_alpha_(0.09 if sel else (0.075 if hovered else 0.055), 1.0).setFill(); path.fill()
-            (_rgb(ME_COLOR, 0.8) if sel else _white(0.12 if hovered else 0.07)).setStroke(); path.setLineWidth_(1.0); path.stroke()
+            (_rgb(ME_COLOR, 0.8) if sel else _encre(0.12 if hovered else 0.07)).setStroke(); path.setLineWidth_(1.0); path.stroke()
             _rgb(ME_COLOR, 0.95 if sel else 0.6).setFill()
             NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(rect.origin.x + 16, rect.origin.y + 16, 7, 7)).fill()
             _draw_text(e.get("title") or "Réunion", NSMakeRect(rect.origin.x + 32, rect.origin.y + 10, rect.size.width - 44, 18), _attrs(13.5, 0.95, weight=0.55))
@@ -462,12 +462,12 @@ class MeetingsWindow(NSObject):
         content.addSubview_(self.card)
         self.d_title = NSTextField.labelWithString_("")
         self.d_title.setFrame_(NSMakeRect(18, top - 20 - 44, dw - 36, 26))
-        self.d_title.setFont_(NSFont.systemFontOfSize_weight_(18, 0.6)); self.d_title.setTextColor_(_white(0.96))
+        self.d_title.setFont_(NSFont.systemFontOfSize_weight_(18, 0.6)); self.d_title.setTextColor_(_encre(0.96))
         self.d_title.setAutoresizingMask_(NSViewWidthSizable | NSViewMinYMargin)
         self.card.addSubview_(self.d_title)
         self.d_meta = NSTextField.labelWithString_("")
         self.d_meta.setFrame_(NSMakeRect(18, top - 20 - 64, dw - 36, 16))
-        self.d_meta.setFont_(NSFont.systemFontOfSize_(11.5)); self.d_meta.setTextColor_(_white(0.45))
+        self.d_meta.setFont_(NSFont.systemFontOfSize_(11.5)); self.d_meta.setTextColor_(_encre(0.45))
         self.d_meta.setAutoresizingMask_(NSViewWidthSizable | NSViewMinYMargin)
         self.card.addSubview_(self.d_meta)
         sc, self.d_text = _textview(NSMakeRect(6, 110, dw - 12, top - 20 - 64 - 120), False, 13.0)

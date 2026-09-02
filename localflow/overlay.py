@@ -52,6 +52,8 @@ from AppKit import (
     NSWindowStyleMaskNonactivatingPanel,
 )
 
+from . import theme
+
 # ---- géométrie (tailles du contenu, hors marge d'ombre) ----
 PAD = 26.0                      # marge autour pour l'ombre et le halo
 IDLE_W, IDLE_H = 76.0, 8.0
@@ -64,22 +66,35 @@ MEET_W, MEET_H = 118.0, 22.0          # réunion en cours : point rouge + chrono
 OFFER_W, OFFER_H = 452.0, 44.0        # « Appel X détecté » + [Enregistrer] [Ignorer]
 MARGINS = {"idle": 14.0, "hover": 14.0, "recording": 18.0, "processing": 18.0, "expanded": 44.0,
            "meeting": 14.0, "meeting_offer": 18.0}
-RED = (1.0, 0.30, 0.32)
+
+# Le système AUR'IA n'a pas de rouge : « ce qui demande de l'attention est orange ».
+# Et il n'a qu'une seule action colorée par écran — d'où un seul accent ici, la
+# distinction entre états passant par la FORME (le fil pour le mains-libres).
+ORANGE = theme.O_VITRINE
+FIL = theme.O_FIL
+
+# Le verre natif fournirait son propre fond ; la DA demande l'encre chaude de la
+# marque. On garde le conteneur (le reste du code s'appuie dessus) mais aucun
+# matériau : la pilule est peinte ici, filet compris.
+USE_MATERIAL = False
 FPS = 60.0
-ANIM_S = 0.40          # plus long qu'avant, mais 90 % du mouvement tient dans les 120 premières ms
-SPRING_OMEGA = 12.0    # raideur : plus haut = démarrage plus sec
-SPRING_ZETA = 0.62     # amortissement : ~8 % de dépassement, un seul rebond
-ANIM_S_REDUCED = 0.16  # « Réduire les animations » : court et sans rebond
+ANIM_S = theme.D_ETAT          # changement d'état : une des cinq durées du système
+ANIM_S_REDUCED = theme.D_DOIGT # « Réduire les animations » : la plus courte
 BAR_COUNT, BAR_W, BAR_GAP = 5, 3.0, 4.0
 SEGMENTS = 140
-VIOLET = (0.66, 0.40, 1.00)
 
-def _violet(a):
-    r, g, b = VIOLET
-    return NSColor.colorWithCalibratedRed_green_blue_alpha_(r, g, b, a)
+def _orange(a):
+    return theme.ns(ORANGE, a)
 
-def _white(a):
-    return NSColor.colorWithCalibratedWhite_alpha_(1.0, a)
+def _fil(a):
+    return theme.ns(FIL, a)
+
+def _encre(a):
+    """L'encre du HUD : le fond crème du système, inversé en clarté."""
+    return theme.ns(theme.HUD_ENCRE, a)
+
+def _trait(a):
+    return theme.ns(theme.HUD_TRAIT, a)
 
 def _reduce_motion():
     """Réglage macOS « Réduire les animations » (Accessibilité → Affichage).
@@ -96,32 +111,40 @@ def _reduce_motion():
 
 
 def _ease(k, reduced=False):
-    """Ressort amorti, pas un ease-out.
+    """La courbe « arrivée » du système : ce qui se pose.
 
-    Un ease-out cubique arrive à destination en ralentissant : correct, mais mou.
-    Un ressort part sec, dépasse la cible d'environ 8 %, puis se recale — c'est ce
-    dépassement que l'œil lit comme « physique » (Dynamic Island, iOS).
-    Solution analytique de l'oscillateur amorti, donc aucun état à maintenir.
+    Le ressort qui était ici dépassait la cible de 8 % pour se lire « physique ».
+    AUR'IA l'interdit — « aucun rebond, aucun ressort » — et la courbe d'arrivée
+    (.16, 1, .3, 1) donne le même départ sec sans jamais dépasser.
     """
     if k >= 1.0:
         return 1.0
     if reduced:
-        return 1.0 - (1.0 - k) ** 3     # ease-out franc, sans dépassement
-    wd = SPRING_OMEGA * math.sqrt(1.0 - SPRING_ZETA * SPRING_ZETA)
-    decay = math.exp(-SPRING_ZETA * SPRING_OMEGA * k)
-    return 1.0 - decay * (math.cos(wd * k) + (SPRING_ZETA * SPRING_OMEGA / wd) * math.sin(wd * k))
+        return 1.0 - (1.0 - k) ** 3
+    return theme.ease_arrivee(k)
 
 def _lerp(a, b, k):
     return a + (b - a) * k
 
-def _attrs(size, alpha=0.92, weight=None, truncate=True):
-    font = NSFont.systemFontOfSize_weight_(size, weight) if weight is not None else NSFont.systemFontOfSize_(size)
+def _attrs(size, alpha=0.92, weight=None, truncate=True, color=None, serif=False, italic=False):
+    """Attributs de texte du système. Figtree partout, Newsreader pour les titres.
+
+    Les appels d'origine passent une graisse AppKit (−1…1) ; AUR'IA raisonne en
+    400/500/600/700. On accepte les deux plutôt que de réécrire trente appels.
+    """
+    if weight is None:
+        w = 400
+    elif weight < 1.0:
+        w = 400 if weight <= 0.35 else (500 if weight < 0.5 else 600)
+    else:
+        w = int(weight)
+    font = theme.font(size, w, serif=serif, italic=italic)
     ps = NSMutableParagraphStyle.alloc().init()
     if truncate:
         ps.setLineBreakMode_(NSLineBreakByTruncatingTail)
     return {
         NSFontAttributeName: font,
-        NSForegroundColorAttributeName: _white(alpha),
+        NSForegroundColorAttributeName: color or _encre(alpha),
         NSParagraphStyleAttributeName: ps,
     }
 
@@ -212,7 +235,7 @@ class _BandView(NSView):
             return
         b = self.bounds()
         cw, ch = ov.cur_w, ov.cur_h
-        radius = min(ch / 2.0, 22.0)
+        radius = theme.RAYON_CARTE_MAX if ch > 60.0 else min(ch / 2.0, 22.0)
         if self.in_glass:
             # On EST la contentView du verre : nos bounds sont déjà la pilule, et c'est
             # le verre qui fournit fond, arête et ombre. On ne dessine que le contenu.
@@ -223,16 +246,29 @@ class _BandView(NSView):
         body = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(content, radius, radius)
 
         if not self.in_glass:
-            # ombre douce (plusieurs couches décalées vers le bas)
-            for i, (dy, grow, a) in enumerate(((-3, 10, 0.10), (-2, 5, 0.14), (-1, 2, 0.18))):
-                sr = NSMakeRect(content.origin.x - grow, content.origin.y - grow + dy, cw + 2 * grow, ch + 2 * grow)
-                NSColor.colorWithCalibratedWhite_alpha_(0.0, a).setFill()
-                NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(sr, radius + grow, radius + grow).fill()
-            NSColor.colorWithCalibratedWhite_alpha_(0.05, 0.62 if ov.blur is not None else 0.97).setFill()
+            # L'élévation : une seule ombre, chaude, et le filet. Les trois
+            # couches noires empilées d'avant étaient une profondeur peinte.
+            # C'est OMBRE_HUD et non l'ombre orange du brand book : sur fond
+            # sombre l'orange ne creuse pas, il rayonne — donc il lueurit.
+            from AppKit import NSGraphicsContext, NSShadow
+            # `currentContext()` est nul quand drawRect_ est appelé à la main,
+            # hors cycle d'affichage — c'est ce que fait l'auto-test. L'ombre
+            # saute alors, le reste doit passer.
+            ctx = NSGraphicsContext.currentContext()
+            if ctx is not None:
+                ctx.saveGraphicsState()
+                sh = NSShadow.alloc().init()
+                sh.setShadowOffset_((0.0, theme.OMBRE_HUD["dy"]))
+                sh.setShadowBlurRadius_(theme.OMBRE_HUD["flou"])
+                sh.setShadowColor_(theme.ns(theme.OMBRE_HUD["couleur"], theme.OMBRE_HUD["alpha"]))
+                sh.set()
+            theme.ns(theme.HUD_FOND, 1.0).setFill()
             body.fill()
-            NSColor.colorWithCalibratedWhite_alpha_(
-                1.0, 0.10 if ov.state in ("idle",) else 0.14).setStroke()
-            body.setLineWidth_(1.0)
+            if ctx is not None:
+                ctx.restoreGraphicsState()
+            # « Le filet remplace l'ombre » : 1 px, et c'est tout.
+            _trait(1.0).setStroke()
+            body.setLineWidth_(theme.FILET)
             body.stroke()
         else:
             # Le reflet mobile reste à nous : le verre natif a une arête, mais son
@@ -259,10 +295,8 @@ class _BandView(NSView):
         if k <= 0.01:
             return
         if st == "processing":
-            self._draw_glow(content, st)
             self._draw_progress(content, k)
         elif st == "recording":
-            self._draw_glow(content, st)
             self._draw_recording(content, k)
         elif st == "expanded":
             self._draw_panel(content, k)
@@ -277,44 +311,19 @@ class _BandView(NSView):
 
     @objc.python_method
     def _draw_specular(self, pill, radius):
-        """Reflet spéculaire qui circule sur l'arête du verre.
+        """Le filet de la pilule quand le fond est fourni par un matériau.
 
-        Le verre natif gère la réfraction du fond, mais son reflet est statique.
-        Ce qui fait lire « liquide » plutôt que « plastique », c'est un point brillant
-        qui se déplace : l'œil en déduit une surface courbe et mobile.
-        On réutilise `_perimeter_point`, déjà écrit pour l'orbe.
+        Il y avait ici un reflet spéculaire qui circulait sur l'arête pour faire
+        lire « liquide ». C'est une lueur, et le système l'exclut : « pour
+        détacher un élément, une élévation, un filet, une ombre orange très
+        douce. Jamais une lueur. » Il ne reste donc que le filet.
         """
-        ov = self.overlay
-        # Arête permanente. Sur fond sombre, le remplissage d'un verre ne se voit pas —
-        # c'est le liseré lumineux qui dit « il y a une surface ici ». Sans lui, la
-        # pilule se lit comme un aplat gris.
         rim = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
             NSMakeRect(pill.origin.x + 0.5, pill.origin.y + 0.5,
                        pill.size.width - 1.0, pill.size.height - 1.0), radius, radius)
-        rim.setLineWidth_(1.0)
-        _white(0.22).setStroke()
+        rim.setLineWidth_(theme.FILET)
+        _trait(1.0).setStroke()
         rim.stroke()
-
-        # Reflets mobiles : deux arcs opposés qui circulent. Le verre natif a une arête,
-        # mais son reflet est fixe — c'est le point brillant QUI BOUGE qui fait lire
-        # « liquide » plutôt que « plastique ».
-        # Uniquement pendant une action : au repos, un point qui tourne en boucle sur une
-        # barre de 8 px n'évoque rien, il attire juste l'œil pour rien.
-        if ov.state in ("idle", "hover", "meeting"):
-            return
-        t0 = (ov.phase * 0.11) % 1.0
-        n = 30
-        for offset, span, size, alpha in ((0.0, 0.18, 4.2, 0.62), (0.5, 0.12, 2.6, 0.26)):
-            for i in range(n):
-                f = i / (n - 1.0)
-                x, y = _perimeter_point(t0 + offset + f * span, pill)
-                edge = math.sin(math.pi * f)
-                d = size * edge
-                if d < 0.3:
-                    continue
-                _white(alpha * edge * edge).setFill()
-                NSBezierPath.bezierPathWithOvalInRect_(
-                    NSMakeRect(x - d / 2, y - d / 2, d, d)).fill()
 
     @objc.python_method
     def _draw_idle(self, pill, hover, k=1.0):
@@ -327,7 +336,7 @@ class _BandView(NSView):
             # 3 à 4 px : indiscernable du repos, et donc aucun indice que c'est cliquable.
             # On dit maintenant explicitement quoi faire.
             dot = 5.0
-            _violet((0.85 + 0.15 * pulse) * k).setFill()
+            _orange((0.85 + 0.15 * pulse) * k).setFill()
             hint = "maintenir fn  ·  double-tap"
             ha = _attrs(11.0, 0.80 * k, weight=0.4, truncate=False)
             hw = _text_width(hint, ha)
@@ -340,9 +349,9 @@ class _BandView(NSView):
         # au repos : point violet qui « respire » doucement, l'app est prête
         a = (0.35 + 0.25 * pulse) * k
         d = 3.0
-        _violet(a).setFill()
+        _orange(a).setFill()
         NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(cx - d / 2, cy - d / 2, d, d)).fill()
-        _white(0.10 * k).setFill()
+        _encre(0.10 * k).setFill()
         lw = pill.size.width * 0.42
         NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(cx - lw / 2, cy - 0.75, lw, 1.5), 0.75, 0.75).fill()
 
@@ -351,7 +360,7 @@ class _BandView(NSView):
         """Réunion en cours : point rouge qui pulse, chrono, mini-barres du micro."""
         ov = self.overlay
         info = ov.meeting_info() or {}
-        r, g, b = RED
+        r, g, b = ORANGE
         pulse = 0.5 + 0.5 * math.sin(ov.phase * 2.2)
         cx = pill.origin.x + 14
         cy = pill.origin.y + pill.size.height / 2.0
@@ -366,7 +375,7 @@ class _BandView(NSView):
         x0 = pill.origin.x + pill.size.width - 30
         for i in range(3):
             h = 3.0 + 8.0 * max(0.0, min(1.0, lv * (1.4 - 0.3 * abs(i - 1))))
-            _white((0.55 + 0.4 * lv) * k).setFill()
+            _encre((0.55 + 0.4 * lv) * k).setFill()
             NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(x0 + i * 6, cy - h / 2, 3, h), 1.5, 1.5).fill()
 
     @objc.python_method
@@ -374,7 +383,7 @@ class _BandView(NSView):
         """Proposition : « Réunion Zoom détectée — enregistrer ? [Oui] [Non] »."""
         ov = self.overlay
         info = ov.meeting_info() or {}
-        r, g, b = RED
+        r, g, b = ORANGE
         cy = pill.origin.y + pill.size.height / 2.0
         x = pill.origin.x + 18
         NSColor.colorWithCalibratedRed_green_blue_alpha_(r, g, b, 0.9 * k).setFill()
@@ -393,36 +402,6 @@ class _BandView(NSView):
         bx = pill.origin.x + pill.size.width - 18
         self._chip(bx - w_ign, cy - 12, "Ignorer", on=None, action="meeting_decline", alpha=k, min_w=w_ign)
         self._chip(bx - w_ign - gap - w_rec, cy - 12, "Enregistrer", on=True, action="meeting_accept", alpha=k, min_w=w_rec)
-
-    @objc.python_method
-    def _draw_glow(self, pill, st):
-        ov = self.overlay
-        speed = 0.45 if st == "recording" else 1.3
-        head = (ov.phase * speed) % 1.0
-        energy = 0.45 + 0.55 * min(1.0, ov.level * 1.8)
-        if st == "processing":
-            energy = 0.75 + 0.25 * math.sin(ov.phase * 5.0)
-        spread = 0.045 + 0.035 * energy
-        base = 0.035
-        for width, amax in ((12.0, 0.05), (5.0, 0.14), (2.2, 0.45), (1.0, 1.0)):
-            for i in range(SEGMENTS):
-                t0 = i / SEGMENTS
-                t1 = (i + 1.2) / SEGMENTS
-                d1 = abs(t0 - head) % 1.0
-                d1 = min(d1, 1 - d1)
-                d2 = abs(t0 - head - 0.5) % 1.0
-                d2 = min(d2, 1 - d2)
-                glow = math.exp(-(d1 / spread) ** 2) + 0.8 * math.exp(-(d2 / spread) ** 2)
-                a = amax * energy * min(1.0, base + glow) * ov.content_alpha
-                if a < 0.01:
-                    continue
-                p = NSBezierPath.bezierPath()
-                p.setLineWidth_(width)
-                p.setLineCapStyle_(1)
-                p.moveToPoint_(_perimeter_point(t0, pill))
-                p.lineToPoint_(_perimeter_point(t1, pill))
-                _violet(a).setStroke()
-                p.stroke()
 
     @objc.python_method
     def _draw_recording(self, pill, k):
@@ -444,8 +423,8 @@ class _BandView(NSView):
         track_w = pw - 2 * m - num_w - 8.0
         if track_w < 8.0 or ph < 16.0:
             return
-        cy = py + ph / 2.0
-        max_h = ph - 14.0
+        cy = py + ph / 2.0 + 3.0   # 3 px de plus haut : le fil passe dessous
+        max_h = ph - 20.0
 
         total = WAVE_COUNT * WAVE_W + (WAVE_COUNT - 1) * WAVE_GAP
         x0 = track_x + (track_w - total) / 2.0
@@ -460,16 +439,37 @@ class _BandView(NSView):
             # les plus anciennes (à gauche) s'effacent : le sens de lecture est évident
             a = (0.30 + 0.70 * (i / max(1, WAVE_COUNT - 1))) * k
             r = NSMakeRect(x0 + i * (WAVE_W + WAVE_GAP), cy - h / 2.0, WAVE_W, h)
-            _white(a).setFill()
+            _encre(a).setFill()
             NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(r, WAVE_W / 2, WAVE_W / 2).fill()
+
+        # Mains-libres : le fil se coud sous la forme d'onde, puis ne bouge plus.
+        # C'était un chrono violet. Le système n'a qu'un accent et distingue les
+        # états par la forme : le fil dit « ça continue sans toi », ce qui est
+        # exactement son emploi dans la marque — la ligne qui relie sans rompre.
+        if ov.rec_hands_free:
+            if not ov.hf_t0:
+                ov.hf_t0 = time.time()
+            e = theme.ease_arrivee(min(1.0, (time.time() - ov.hf_t0) / theme.D_RECIT))
+            fp = NSBezierPath.bezierPath()
+            fp.setLineWidth_(3.0)          # 5 px sur une piste de 36, c'est trop
+            fp.setLineCapStyle_(1)         # extrémités arrondies
+            n = 28
+            for i in range(n + 1):
+                t = i / n
+                if t > e:
+                    break
+                x = track_x + track_w * t
+                y = py + 6.0 + 1.8 * math.sin(t * math.pi * 2.0)
+                fp.moveToPoint_((x, y)) if i == 0 else fp.lineToPoint_((x, y))
+            if fp.elementCount() > 1:
+                _fil(0.95 * k).setStroke()
+                fp.stroke()
+        else:
+            ov.hf_t0 = 0.0
 
         elapsed = max(0.0, time.time() - ov.rec_t0) if ov.rec_t0 else 0.0
         clock = f"{int(elapsed) // 60}:{int(elapsed) % 60:02d}"
-        # Mains libres : chrono violet — le seul rappel visuel que ça continue sans toi.
         ta = _attrs(11.5, 0.90 * k, weight=0.45, truncate=False)
-        if ov.rec_hands_free:
-            ta = dict(ta)
-            ta[NSForegroundColorAttributeName] = _violet(0.95 * k)
         _draw_text(clock, NSMakeRect(px + pw - m - num_w, py + (ph - 15) / 2.0, num_w, 15), ta)
 
     @objc.python_method
@@ -496,7 +496,7 @@ class _BandView(NSView):
         track_y = py + (ph - track_h) / 2.0
 
         track = NSMakeRect(track_x, track_y, track_w, track_h)
-        _white(0.13 * k).setFill()
+        _encre(0.13 * k).setFill()
         NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(track, track_h / 2, track_h / 2).fill()
 
         fill_w = max(track_h, track_w * p)   # jamais plus fin que son propre arrondi
@@ -507,36 +507,38 @@ class _BandView(NSView):
             ctx = NSGraphicsContext.currentContext()
             ctx.saveGraphicsState()
             fpath.addClip()
-            r, g, b = VIOLET
-            grad = NSGradient.alloc().initWithColors_atLocations_colorSpace_(
-                [NSColor.colorWithCalibratedRed_green_blue_alpha_(r * 0.75, g * 0.75, 1.0, 0.95 * k),
-                 NSColor.colorWithCalibratedRed_green_blue_alpha_(r, g, b, 0.95 * k)],
-                [0.0, 1.0], NSColorSpace.sRGBColorSpace())
-            grad.drawInRect_angle_(fill, 0.0)
+            # Aplat orange, sans dégradé : chaque orange du système a un seul
+            # emploi, en mélanger deux pour faire joli les vide tous les deux.
+            _orange(0.95 * k).setFill()
+            NSBezierPath.fillRect_(fill)
             # Reflet qui balaie la partie remplie : garde la barre vivante quand la
             # progression est lente, sans jamais laisser croire qu'elle avance.
             if not ov.progress_done:
                 sheen_x = track_x + (fill_w + 60.0) * ((ov.phase * 0.65) % 1.0) - 30.0
                 sh = NSGradient.alloc().initWithColors_atLocations_colorSpace_(
-                    [_white(0.0), _white(0.30 * k), _white(0.0)], [0.0, 0.5, 1.0], NSColorSpace.sRGBColorSpace())
+                    [_encre(0.0), _encre(0.30 * k), _encre(0.0)], [0.0, 0.5, 1.0], NSColorSpace.sRGBColorSpace())
                 sh.drawInRect_angle_(NSMakeRect(sheen_x, track_y, 60.0, track_h), 0.0)
             ctx.restoreGraphicsState()
-            # pointe lumineuse en bout de barre
-            _white(0.55 * k).setFill()
-            NSBezierPath.bezierPathWithOvalInRect_(
-                NSMakeRect(track_x + fill_w - track_h, track_y, track_h, track_h)).fill()
-            # Éclat d'arrivée : la barre atteignait 100 % puis disparaissait, sans rien
-            # marquer. Un halo blanc qui se dilate et s'éteint en 350 ms donne au geste
-            # une fin nette — c'est le seul retour visuel que le texte est posé.
+            # Arrivée : le fil se coud d'un bout à l'autre de la piste.
+            # C'était un halo blanc qui se dilatait — le système exclut la lueur,
+            # et il donne justement au fil cet emploi : « elle se dessine une fois
+            # à l'arrivée, puis ne bouge plus ». Même geste, même durée, sans lueur.
             dt = time.time() - ov.done_t0
-            if ov.done_t0 and dt < 0.35:
-                e = 1.0 - (1.0 - dt / 0.35) ** 2      # ease-out
-                grow = 1.0 + 5.0 * e
-                _white(0.45 * (1.0 - e) * k).setFill()
-                NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
-                    NSMakeRect(track_x - grow, track_y - grow,
-                               fill_w + 2 * grow, track_h + 2 * grow),
-                    (track_h + 2 * grow) / 2, (track_h + 2 * grow) / 2).fill()
+            if ov.done_t0 and dt < theme.D_ETAT:
+                e = theme.ease_arrivee(dt / theme.D_ETAT)
+                # Le fil traverse toute la pilule, pas seulement la piste : la
+                # barre est déjà pleine et orange, un trait posé dessus ne se
+                # verrait pas. Et traverser une frontière est précisément le seul
+                # privilège que le système accorde au fil.
+                fp = NSBezierPath.bezierPath()
+                fp.setLineWidth_(theme.FIL_EPAISSEUR)
+                fp.setLineCapStyle_(1)          # extrémités arrondies
+                x0 = px + ph / 2.0
+                y = py + 4.0
+                fp.moveToPoint_((x0, y))
+                fp.lineToPoint_((x0 + (pw - ph) * e, y))
+                _fil(0.95 * (1.0 - 0.5 * e) * k).setStroke()
+                fp.stroke()
 
         _draw_text(pct, NSMakeRect(px + pw - m - num_w, py + (ph - 15) / 2.0, num_w, 15), pa)
 
@@ -556,7 +558,7 @@ class _BandView(NSView):
                 a = 0.55 + 0.45 * min(1.0, lv * 1.5)
             h = max(3.0, lv * max_h)
             r = NSMakeRect(x0 + i * (BAR_W + BAR_GAP), cy - h / 2.0, BAR_W, h)
-            _white(a * k).setFill()
+            _encre(a * k).setFill()
             NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(r, BAR_W / 2, BAR_W / 2).fill()
 
     # ---- panneau déplié ----
@@ -570,13 +572,13 @@ class _BandView(NSView):
         rect = NSMakeRect(x, y, w, h)
         hovered = self.hover_pt is not None and NSPointInRect(self.hover_pt, rect)
         if on is True:
-            _violet((0.28 if not hovered else 0.38) * alpha).setFill()
+            _orange((0.28 if not hovered else 0.38) * alpha).setFill()
         else:
-            _white((0.07 if not hovered else 0.13) * alpha).setFill()
+            _encre((0.07 if not hovered else 0.13) * alpha).setFill()
         path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(rect, h / 2, h / 2)
         path.fill()
         if on is True:
-            _violet(0.9 * alpha).setStroke()
+            _orange(0.9 * alpha).setStroke()
             path.setLineWidth_(1.0)
             path.stroke()
         _draw_text(label, NSMakeRect(x + 11, y + 4.5, w - 22, h - 8), attrs)
@@ -702,7 +704,7 @@ class _BandView(NSView):
         rr = d / 2.0
         # halo
         for grow, a in ((10, 0.06), (5, 0.12)):
-            _violet(a * k).setFill()
+            _orange(a * k).setFill()
             NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(cx - rr - grow, cy - rr - grow, d + 2 * grow, d + 2 * grow)).fill()
         # corps : dégradé radial sombre
         body = NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(cx - rr, cy - rr, d, d))
@@ -741,7 +743,7 @@ class _BandView(NSView):
         # particules
         for i, (px_, py_, s_) in enumerate(((1.35, 0.9, 2.0), (-1.25, -0.7, 1.5), (0.9, -1.3, 1.2))):
             tw = 0.5 + 0.5 * math.sin(ov.phase * 1.3 + i * 2.1)
-            _white((0.25 + 0.55 * tw) * k).setFill()
+            _encre((0.25 + 0.55 * tw) * k).setFill()
             NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(cx + px_ * rr - s_ / 2, cy + py_ * rr - s_ / 2, s_, s_)).fill()
 
     @objc.python_method
@@ -888,6 +890,7 @@ class Overlay:
         self._wave_tick = 0
         self.rec_t0 = 0.0
         self.rec_hands_free = False
+        self.hf_t0 = 0.0
 
         # progression de la transcription (voir begin_progress)
         self.progress_t0 = 0.0
@@ -930,6 +933,11 @@ class Overlay:
         self.blur = None
         self.glass = None
         try:
+            if not USE_MATERIAL:
+                # La DA demande l'encre chaude de la marque : ni verre ni flou ne
+                # peuvent la porter, ils fournissent leur propre fond. On peint
+                # la pilule nous-mêmes (voir drawRect_).
+                raise RuntimeError("matériau désactivé par la DA")
             import objc as _objc
             Glass = _objc.lookUpClass("NSGlassEffectView")
             g = Glass.alloc().initWithFrame_(NSMakeRect(0, 0, 10, 10))
@@ -957,6 +965,8 @@ class Overlay:
             self.glass = g
         except Exception:
             try:
+                if not USE_MATERIAL:
+                    raise RuntimeError("matériau désactivé par la DA")
                 from AppKit import (NSVisualEffectView, NSVisualEffectBlendingModeBehindWindow,
                                     NSVisualEffectStateActive, NSVisualEffectMaterialHUDWindow)
                 blur = NSVisualEffectView.alloc().initWithFrame_(NSMakeRect(0, 0, 10, 10))
@@ -1027,6 +1037,7 @@ class Overlay:
     # ---- enregistrement ----
 
     def begin_recording(self, hands_free=False):
+        self.hf_t0 = 0.0
         """Remet la forme d'onde à plat et démarre le chrono."""
         self.wave = [0.0] * WAVE_COUNT
         self._wave_tick = 0

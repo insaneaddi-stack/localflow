@@ -43,7 +43,7 @@ from AppKit import (
 )
 from Foundation import NSObject
 
-from .overlay import _BandView, _attrs, _draw_text, _text_width, _white
+from .overlay import _BandView, _attrs, _draw_text, _text_width, _encre
 from .paste import copy_text
 
 W, H = 760.0, 700.0
@@ -147,7 +147,7 @@ class _ListView(NSView):
                 [c(0.9 * st), c(0.35 * st), c(0.08 * st), c(0.0)], [0.0, 0.3, 0.65, 1.0], NSColorSpace.sRGBColorSpace())
             grad.drawInRect_relativeCenterPosition_(NSMakeRect(rect.origin.x - 120, rect.origin.y - 60, 300, rect.size.height + 120), (0.0, 0.0))
             ctx.restoreGraphicsState()
-            _white(0.14 if hovered else 0.07).setStroke(); path.setLineWidth_(1.0); path.stroke()
+            _encre(0.14 if hovered else 0.07).setStroke(); path.setLineWidth_(1.0); path.stroke()
             if copied:
                 c(0.95).setStroke(); path.stroke()
             # témoin couleur
@@ -186,7 +186,7 @@ class _StatsView(NSView):
         # carte de fond
         card = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(M, 8, w - 2 * M, b.size.height - 16), 16, 16)
         NSColor.colorWithCalibratedWhite_alpha_(0.06, 1.0).setFill(); card.fill()
-        _white(0.07).setStroke(); card.setLineWidth_(1.0); card.stroke()
+        _encre(0.07).setStroke(); card.setLineWidth_(1.0); card.stroke()
 
         _draw_text("CETTE SEMAINE", NSMakeRect(M + 18, b.size.height - 34, 200, 14), _attrs(10.5, 0.5, weight=0.5))
         # barres
@@ -216,7 +216,7 @@ class _StatsView(NSView):
             lw = _text_width(lbl, la)
             _draw_text(lbl, NSMakeRect(x + bw / 2 - lw / 2, base_y - 18, lw + 2, 13), la)
         # séparateur vertical
-        _white(0.07).setFill()
+        _encre(0.07).setFill()
         NSBezierPath.fillRect_(NSMakeRect(M + left_w, 24, 0.5, b.size.height - 48))
         # colonne droite : apps + temps gagné
         rx = M + left_w + 22

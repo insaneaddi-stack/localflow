@@ -155,8 +155,15 @@ FOCUS_EPAISSEUR = 2.0   # anneau : 2 px #BE4400, écart 4 px, le même partout
 FOCUS_ECART = 4.0
 FIL_EPAISSEUR = 5.0     # le fil : #FB5F00, 5 px, extrémités arrondies
 
-# L'ombre unique, teintée orange, réservée à ce qui flotte vraiment
+# L'ombre unique du brand book : teintée orange, réservée à ce qui flotte
+# vraiment. Elle est spécifiée sur le fond crème, où l'orange assombrit.
 OMBRE = {"dy": -10.0, "flou": 26.0, "couleur": (232 / 255, 93 / 255, 0.0), "alpha": 0.20}
+
+# Sur la surface sombre, la même ombre ne peut plus assombrir : elle rayonne, et
+# se lit exactement comme la lueur que le système interdit. La règle des neutres
+# s'applique donc aussi à l'ombre — même teinte chaude, clarté inversée : c'est
+# un brun très sombre qui porte l'élévation, l'orange reste au crème.
+OMBRE_HUD = {"dy": -10.0, "flou": 22.0, "couleur": (0.05, 0.035, 0.03), "alpha": 0.55}
 
 
 # --------------------------------------------------------------- mouvement ----

@@ -32,7 +32,7 @@ from AppKit import (
     NSWindowStyleMaskNonactivatingPanel,
 )
 
-from .overlay import _BandView, _attrs, _draw_text, _text_width, _violet, _white, MARGINS, IDLE_H
+from .overlay import _BandView, _attrs, _draw_text, _text_width, _orange, _encre, MARGINS, IDLE_H
 
 CARD_W, CARD_H = 520.0, 150.0
 GAP_ABOVE_BAR = 64.0      # espace entre la carte et la barre (la flèche vit là)
@@ -131,7 +131,7 @@ class _TutorialView(NSView):
                 NSMakeRect(card.origin.x - grow, card.origin.y - grow + dy, CARD_W + 2 * grow, CARD_H + 2 * grow), 22 + grow, 22 + grow).fill()
         NSColor.colorWithCalibratedWhite_alpha_(0.05, 0.97 * k).setFill()
         path.fill()
-        _white(0.14 * k).setStroke(); path.setLineWidth_(1.0); path.stroke()
+        _encre(0.14 * k).setStroke(); path.setLineWidth_(1.0); path.stroke()
         # aura violette discrète en bas de la carte
         from AppKit import NSGraphicsContext, NSGradient, NSColorSpace
         ctx = NSGraphicsContext.currentContext(); ctx.saveGraphicsState(); path.addClip()
@@ -154,7 +154,7 @@ class _TutorialView(NSView):
         n = len(STEPS)
         px = card.origin.x + 22
         for i in range(n):
-            (_violet(0.95 * k) if i == t.index else _white(0.18 * k)).setFill()
+            (_orange(0.95 * k) if i == t.index else _encre(0.18 * k)).setFill()
             NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(px + i * 12, card.origin.y + 16, 6, 6)).fill()
         ha = _attrs(10.5, 0.45 * k)
         hw = _text_width(step["hint"], ha)
@@ -167,7 +167,7 @@ class _TutorialView(NSView):
             y_tip = t.target_y + 14 - bob
             if y_top - y_tip > 18:
                 for width, a in ((9.0, 0.12), (4.0, 0.30), (1.8, 0.95)):
-                    _violet(a * k).setStroke()
+                    _orange(a * k).setStroke()
                     p = NSBezierPath.bezierPath(); p.setLineWidth_(width); p.setLineCapStyle_(1)
                     p.moveToPoint_((x0, y_top)); p.lineToPoint_((x0, y_tip + 10)); p.stroke()
                     head = NSBezierPath.bezierPath(); head.setLineWidth_(width); head.setLineCapStyle_(1); head.setLineJoinStyle_(1)
@@ -211,8 +211,8 @@ class _ButtonView(NSView):
         b = self.bounds()
         k = self.tut.alpha if self.tut else 1.0
         path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(0.5, 0.5, b.size.width - 1, b.size.height - 1), BTN_H / 2, BTN_H / 2)
-        _violet((0.40 if self.hover else 0.28) * k).setFill(); path.fill()
-        _violet(0.9 * k).setStroke(); path.setLineWidth_(1.0); path.stroke()
+        _orange((0.40 if self.hover else 0.28) * k).setFill(); path.fill()
+        _orange(0.9 * k).setStroke(); path.setLineWidth_(1.0); path.stroke()
         a = _attrs(12, 0.96 * k, weight=0.5)
         w = _text_width(self.label, a)
         _draw_text(self.label, NSMakeRect(b.size.width / 2 - w / 2, b.size.height / 2 - 8, w + 2, 16), a)

@@ -42,7 +42,7 @@ from Foundation import NSObject
 
 from AppKit import NSForegroundColorAttributeName
 
-from .overlay import _attrs, _draw_text, _white
+from .overlay import _attrs, _draw_text, _encre
 
 BG = 0.045
 W, H = 620.0, 0.0   # H calculée selon le nombre de lignes
@@ -126,7 +126,7 @@ class _PermRow(NSView):
         NSColor.colorWithCalibratedWhite_alpha_(0.06, 1.0).setFill(); path.fill()
         col = GREEN if self.ok else (AMBER if self.pending else REDC)
         c = lambda a: NSColor.colorWithCalibratedRed_green_blue_alpha_(col[0], col[1], col[2], a)
-        (c(0.6) if self.ok else _white(0.08)).setStroke(); path.setLineWidth_(1.0); path.stroke()
+        (c(0.6) if self.ok else _encre(0.08)).setStroke(); path.setLineWidth_(1.0); path.stroke()
         # témoin
         c(0.25).setFill(); NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(18, b.size.height / 2 - 11, 22, 22)).fill()
         c(0.95).setFill(); NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(23, b.size.height / 2 - 6, 12, 12)).fill()
@@ -193,10 +193,10 @@ class PermissionsWindow(NSObject):
         except Exception:
             pass
         t = NSTextField.labelWithString_("Deux autorisations, une seule fois")
-        t.setFrame_(NSMakeRect(98, h - 70, W - 120, 28)); t.setFont_(NSFont.systemFontOfSize_weight_(20, 0.6)); t.setTextColor_(_white(0.96))
+        t.setFrame_(NSMakeRect(98, h - 70, W - 120, 28)); t.setFont_(NSFont.systemFontOfSize_weight_(20, 0.6)); t.setTextColor_(_encre(0.96))
         content.addSubview_(t)
         st = NSTextField.labelWithString_("macOS exige un clic de ta part pour chacune. Cette fenêtre se ferme toute seule quand c'est fait.")
-        st.setFrame_(NSMakeRect(98, h - 94, W - 120, 18)); st.setFont_(NSFont.systemFontOfSize_(12)); st.setTextColor_(_white(0.5))
+        st.setFrame_(NSMakeRect(98, h - 94, W - 120, 18)); st.setFont_(NSFont.systemFontOfSize_(12)); st.setTextColor_(_encre(0.5))
         content.addSubview_(st)
         y = h - 130
         self.rows, self.buttons = [], []
@@ -212,7 +212,7 @@ class PermissionsWindow(NSObject):
             content.addSubview_(b)
             self.rows.append(row); self.buttons.append(b)
         self.footer = NSTextField.labelWithString_("")
-        self.footer.setFrame_(NSMakeRect(28, 18, W - 56, 18)); self.footer.setFont_(NSFont.systemFontOfSize_(11.5)); self.footer.setTextColor_(_white(0.45))
+        self.footer.setFrame_(NSMakeRect(28, 18, W - 56, 18)); self.footer.setFont_(NSFont.systemFontOfSize_(11.5)); self.footer.setTextColor_(_encre(0.45))
         content.addSubview_(self.footer)
         self.window = win
 
