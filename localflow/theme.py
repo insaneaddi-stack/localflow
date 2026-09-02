@@ -294,3 +294,102 @@ def bezier(x1, y1, x2, y2):
 ease_standard = bezier(*EASE_STANDARD)
 ease_douce = bezier(*EASE_DOUCE)
 ease_arrivee = bezier(*EASE_ARRIVEE)
+
+
+# ---------------------------------------------------- barre de menus ----
+
+ICON_CACHE = os.path.expanduser("~/Library/Caches/LocalFlow/menubar")
+
+
+def menubar_icon(state, size=18.0):
+    """Le monogramme, plus un signe d'état à côté. Renvoie un chemin PNG, ou None.
+
+    La barre de menus portait des emoji — ⏳ 🎙 🔴 💭 — c'est-à-dire le dessin de
+    quelqu'un d'autre. « Le A seul » est la forme que la marque réserve à
+    l'icône. Le signe se pose À CÔTÉ et non dessous : le A doit garder ses
+    proportions (le fichier est en 256 × 244, le forcer au carré l'écrase).
+
+    Les états se distinguent par la forme du signe et par un seul orange —
+    jamais par un rouge, le système n'en a pas.
+    """
+    try:
+        from AppKit import (NSImage, NSBezierPath, NSMakeRect, NSBitmapImageRep,
+                            NSPNGFileType, NSCompositingOperationSourceOver)
+
+        os.makedirs(ICON_CACHE, exist_ok=True)
+        path = os.path.join(ICON_CACHE, f"{state}-{int(size)}-v2.png")
+        if os.path.exists(path):
+            return path
+        mono = image(MONOGRAMME)
+        if mono is None:
+            return None
+        sz = mono.size()
+        ratio = (sz.width / sz.height) if sz.height else 1.0
+
+        h = size
+        aw = h * ratio                      # largeur du A à hauteur pleine
+        signe = state not in ("idle", "loading")
+        w = aw + (h * 0.62 if signe else 0.0)
+
+        img = NSImage.alloc().initWithSize_((w, h))
+        img.lockFocus()
+        alpha = {"loading": 0.35, "processing": 0.75}.get(state, 1.0)
+        mono.drawInRect_fromRect_operation_fraction_(
+            NSMakeRect(0, 0, aw, h), NSMakeRect(0, 0, 0, 0),
+            NSCompositingOperationSourceOver, alpha)
+
+        cx = aw + h * 0.31                  # centre de la zone du signe
+        cy = h * 0.5
+        if state == "recording":
+            r = h * 0.155
+            ns(O_VITRINE, 1.0).setFill()
+            NSBezierPath.bezierPathWithOvalInRect_(
+                NSMakeRect(cx - r, cy - r, r * 2, r * 2)).fill()
+        elif state == "hands_free":
+            # le fil : ça continue sans toi
+            fp = NSBezierPath.bezierPath()
+            fp.setLineWidth_(max(1.6, h * 0.11))
+            fp.setLineCapStyle_(1)
+            # « Une seule courbe » : une ondulation franche, pas un gribouillis —
+            # à 18 px un S se referme et devient une tache.
+            fp.moveToPoint_((aw + h * 0.09, cy - h * 0.09))
+            fp.curveToPoint_controlPoint1_controlPoint2_(
+                (aw + h * 0.53, cy + h * 0.09),
+                (aw + h * 0.24, cy + h * 0.16),
+                (aw + h * 0.38, cy - h * 0.16))
+            ns(O_FIL, 1.0).setStroke()
+            fp.stroke()
+        elif state == "meeting":
+            r = h * 0.17
+            ring = NSBezierPath.bezierPathWithOvalInRect_(
+                NSMakeRect(cx - r, cy - r, r * 2, r * 2))
+            ring.setLineWidth_(max(1.3, h * 0.09))
+            ns(O_VITRINE, 1.0).setStroke()
+            ring.stroke()
+        elif state == "processing":
+            # trois points : le travail est en cours, rien à décider
+            r = h * 0.075
+            for k in (-1, 0, 1):
+                ns(O_VITRINE, 0.45 + 0.25 * (k + 1)).setFill()
+                NSBezierPath.bezierPathWithOvalInRect_(
+                    NSMakeRect(cx - r + k * h * 0.20, cy - r, r * 2, r * 2)).fill()
+        img.unlockFocus()
+
+        rep = NSBitmapImageRep.imageRepWithData_(img.TIFFRepresentation())
+        data = rep.representationUsingType_properties_(NSPNGFileType, {})
+        if data is None or not data.writeToFile_atomically_(path, True):
+            return None
+        return path
+    except Exception:
+        return None
+
+
+def attributed(text, size, weight=400, color=None, serif=False, italic=False):
+    """Chaîne attribuée dans les caractères du système (menus natifs, champs)."""
+    from AppKit import (NSAttributedString, NSFontAttributeName,
+                        NSForegroundColorAttributeName)
+
+    attrs = {NSFontAttributeName: font(size, weight, serif=serif, italic=italic)}
+    if color is not None:
+        attrs[NSForegroundColorAttributeName] = color
+    return NSAttributedString.alloc().initWithString_attributes_(text, attrs)

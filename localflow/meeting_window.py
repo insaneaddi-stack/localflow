@@ -53,15 +53,16 @@ from AppKit import (
 )
 from Foundation import NSObject, NSAttributedString, NSMutableAttributedString
 
+from . import theme
 from .overlay import _attrs, _draw_text, _text_width, _encre
 from .paste import copy_text
 
-BG = 0.045
+# BG a disparu : le fond vient de theme.FOND (le crème du système).
 M = 24.0
 ROW_H = 78.0
-ME_COLOR = (0.66, 0.40, 1.00)
-THEM_COLOR = (0.35, 0.85, 0.95)
-RED = (1.0, 0.30, 0.32)
+ME_COLOR = theme.O_VITRINE      # moi : le seul accent
+THEM_COLOR = theme.ENCRE_2      # eux : l'encre courante
+RED = theme.O_VITRINE           # le système n'a pas de rouge
 
 def _rgb(c, a=1.0):
     return NSColor.colorWithCalibratedRed_green_blue_alpha_(c[0], c[1], c[2], a)
@@ -112,7 +113,7 @@ def _button(title, target, action, frame):
     b.setBezelStyle_(NSBezelStyleRounded)
     b.setTarget_(target)
     b.setAction_(action)
-    b.setFont_(NSFont.systemFontOfSize_(12.5))
+    b.setFont_(theme.font(12.5))
     return b
 
 class _MeetCard(NSView):
@@ -129,7 +130,7 @@ class _MeetCard(NSView):
     def drawRect_(self, r):
         b = self.bounds()
         path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(0.5, 0.5, b.size.width - 1, b.size.height - 1), 16, 16)
-        NSColor.colorWithCalibratedWhite_alpha_(0.06, 1.0).setFill(); path.fill()
+        theme.ns(theme.FOND_PUR).setFill(); path.fill()
         _encre(0.08).setStroke(); path.setLineWidth_(1.0); path.stroke()
         if self.title:
             _rgb(self.color, 0.95).setFill()
@@ -138,7 +139,7 @@ class _MeetCard(NSView):
 
 class _MeetBackdrop(NSView):
     def drawRect_(self, r):
-        NSColor.colorWithCalibratedWhite_alpha_(BG, 1.0).setFill()
+        theme.ns(theme.FOND).setFill()
         NSBezierPath.fillRect_(self.bounds())
 
 class _MeetHeader(NSView):
@@ -163,7 +164,7 @@ class _MeetHeader(NSView):
             _rgb(self.dot, 0.95).setFill()
             NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(x + 2, b.size.height - 52, 8, 8)).fill()
             x += 22
-        _draw_text(self.title, NSMakeRect(x, b.size.height - 62, b.size.width - x - M, 28), _attrs(22, 0.96, weight=0.6))
+        _draw_text(self.title, NSMakeRect(x, b.size.height - 62, b.size.width - x - M, 28), _attrs(22, 0.96, weight=600, serif=True))
         _draw_text(self.subtitle, NSMakeRect(M, b.size.height - 80, b.size.width - 2 * M, 16), _attrs(11.5, 0.42))
 
 
@@ -175,8 +176,11 @@ def _window(title, w, h, delegate):
     win.setTitleVisibility_(NSWindowTitleHidden)
     win.setTitlebarAppearsTransparent_(True)
     win.setMovableByWindowBackground_(True)
-    win.setAppearance_(NSAppearance.appearanceNamed_("NSAppearanceNameDarkAqua"))
-    win.setBackgroundColor_(NSColor.colorWithCalibratedWhite_alpha_(BG, 1.0))
+    # Apparence claire imposée : la fenêtre est crème, un Aqua sombre
+    # repeindrait les contrôles natifs (barres de défilement, champs, curseur
+    # de saisie) en clair sur clair.
+    win.setAppearance_(NSAppearance.appearanceNamed_("NSAppearanceNameAqua"))
+    win.setBackgroundColor_(theme.ns(theme.FOND))
     win.setReleasedWhenClosed_(False)
     win.setDelegate_(delegate)
     win.setMinSize_((720, 460))
@@ -236,7 +240,7 @@ class LiveMeetingWindow(NSObject):
         self.status = NSTextField.labelWithString_("")
         self.status.setFrame_(NSMakeRect(M, 24, W - 420, 20))
         self.status.setTextColor_(_encre(0.5))
-        self.status.setFont_(NSFont.systemFontOfSize_(11.5))
+        self.status.setFont_(theme.font(11.5))
         self.status.setAutoresizingMask_(NSViewWidthSizable | NSViewMaxXMargin)
         content.addSubview_(self.status)
         self.btn_stop = _button("Terminer & résumer", self, "stopClicked:", NSMakeRect(W - M - 180, 18, 180, 32))
@@ -292,16 +296,16 @@ class LiveMeetingWindow(NSObject):
         if not segs:
             out.appendAttributedString_(NSAttributedString.alloc().initWithString_attributes_(
                 "La transcription apparaît ici quelques secondes après chaque prise de parole.\n\nMoi = ton micro · Eux = le son de l'appel.",
-                {NSFontAttributeName: NSFont.systemFontOfSize_(13), NSForegroundColorAttributeName: _encre(0.4)}))
+                {NSFontAttributeName: theme.font(13), NSForegroundColorAttributeName: _encre(0.4)}))
         for s in segs:
             who = "Moi" if s["who"] == "me" else "Eux"
             col = _rgb(ME_COLOR if s["who"] == "me" else THEM_COLOR, 0.95)
             out.appendAttributedString_(NSAttributedString.alloc().initWithString_attributes_(
                 f"{_fmt_ts(s['t0'])}  ", {NSFontAttributeName: NSFont.monospacedDigitSystemFontOfSize_weight_(11, 0.3), NSForegroundColorAttributeName: _encre(0.35)}))
             out.appendAttributedString_(NSAttributedString.alloc().initWithString_attributes_(
-                who + "\n", {NSFontAttributeName: NSFont.systemFontOfSize_weight_(12, 0.6), NSForegroundColorAttributeName: col}))
+                who + "\n", {NSFontAttributeName: theme.font(12, 600), NSForegroundColorAttributeName: col}))
             out.appendAttributedString_(NSAttributedString.alloc().initWithString_attributes_(
-                s["text"] + "\n\n", {NSFontAttributeName: NSFont.systemFontOfSize_(13.5), NSForegroundColorAttributeName: _encre(0.92)}))
+                s["text"] + "\n\n", {NSFontAttributeName: theme.font(13.5), NSForegroundColorAttributeName: _encre(0.92)}))
         self.transcript.textStorage().setAttributedString_(out)
         self.transcript.scrollRangeToVisible_((out.length(), 0))
 
@@ -408,7 +412,7 @@ class _MeetingList(NSView):
             hovered = self.hover_pt is not None and NSPointInRect(self.hover_pt, rect)
             sel = i == self.selected
             path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(rect, 14, 14)
-            NSColor.colorWithCalibratedWhite_alpha_(0.09 if sel else (0.075 if hovered else 0.055), 1.0).setFill(); path.fill()
+            theme.ns(theme.CREME if sel else (theme.CARTE if hovered else theme.FOND_PUR)).setFill(); path.fill()
             (_rgb(ME_COLOR, 0.8) if sel else _encre(0.12 if hovered else 0.07)).setStroke(); path.setLineWidth_(1.0); path.stroke()
             _rgb(ME_COLOR, 0.95 if sel else 0.6).setFill()
             NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(rect.origin.x + 16, rect.origin.y + 16, 7, 7)).fill()
@@ -462,12 +466,12 @@ class MeetingsWindow(NSObject):
         content.addSubview_(self.card)
         self.d_title = NSTextField.labelWithString_("")
         self.d_title.setFrame_(NSMakeRect(18, top - 20 - 44, dw - 36, 26))
-        self.d_title.setFont_(NSFont.systemFontOfSize_weight_(18, 0.6)); self.d_title.setTextColor_(_encre(0.96))
+        self.d_title.setFont_(theme.font(18, 600)); self.d_title.setTextColor_(_encre(0.96))
         self.d_title.setAutoresizingMask_(NSViewWidthSizable | NSViewMinYMargin)
         self.card.addSubview_(self.d_title)
         self.d_meta = NSTextField.labelWithString_("")
         self.d_meta.setFrame_(NSMakeRect(18, top - 20 - 64, dw - 36, 16))
-        self.d_meta.setFont_(NSFont.systemFontOfSize_(11.5)); self.d_meta.setTextColor_(_encre(0.45))
+        self.d_meta.setFont_(theme.font(11.5)); self.d_meta.setTextColor_(_encre(0.45))
         self.d_meta.setAutoresizingMask_(NSViewWidthSizable | NSViewMinYMargin)
         self.card.addSubview_(self.d_meta)
         sc, self.d_text = _textview(NSMakeRect(6, 110, dw - 12, top - 20 - 64 - 120), False, 13.0)
@@ -476,7 +480,7 @@ class MeetingsWindow(NSObject):
         # question
         self.q = NSTextField.alloc().initWithFrame_(NSMakeRect(18, 68, dw - 36 - 110, 30))
         self.q.setPlaceholderString_("Pose une question sur cette réunion… (↩)")
-        self.q.setFont_(NSFont.systemFontOfSize_(13)); self.q.setBezelStyle_(1)
+        self.q.setFont_(theme.font(13)); self.q.setBezelStyle_(1)
         self.q.setTarget_(self); self.q.setAction_("askClicked:")
         self.q.setAutoresizingMask_(NSViewWidthSizable)
         self.card.addSubview_(self.q)

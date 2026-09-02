@@ -702,83 +702,51 @@ class _BandView(NSView):
                                                     NSCompositingOperationSourceOver, alpha)
         return sz.width
 
-    # ---- palette d'auras par app (RGB 0-1) ----
-    AURAS = {
-        "default": (0.55, 0.40, 1.00),   # violet
-        "slack": (0.35, 0.95, 0.55),     # vert
-        "whatsapp": (0.35, 0.95, 0.55),
-        "mail": (0.35, 0.70, 1.00),      # bleu
-        "gmail": (0.35, 0.70, 1.00),
-        "notes": (1.00, 0.62, 0.30),     # orange
-        "notion": (0.95, 0.45, 0.85),    # rose
-        "messages": (0.35, 0.95, 0.55),
-        "ghostty": (0.55, 0.40, 1.00),
-        "code": (0.35, 0.70, 1.00),
-    }
+    # Il y avait ici une aura par app — violet, vert, bleu, rose, orange — qui
+    # montait du bas de chaque carte. Deux règles du système l'excluent : « une
+    # seule action colorée par écran », et « pour détacher un élément : une
+    # élévation, un filet, une ombre. Jamais une lueur. » Les cartes se
+    # distinguent maintenant par leur filet et leur élévation ; l'app est dite
+    # en toutes lettres, ce qui est de toute façon plus lisible qu'une teinte
+    # qu'il fallait apprendre.
+    AURAS = {"default": theme.O_VITRINE}
 
     @objc.python_method
     def _aura_color(self, app):
-        a = (app or "").lower()
-        for key, rgb in self.AURAS.items():
-            if key != "default" and key in a:
-                return rgb
         return self.AURAS["default"]
 
     @objc.python_method
     def _draw_card(self, rect, item, idx, ka, hovered, copied):
-        """Carte noire à coins ronds avec une aura colorée qui monte du bas."""
-        from AppKit import NSGraphicsContext
-        r, g, b = self._aura_color(item.get("app", ""))
-        path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(rect, 18, 18)
-        NSColor.colorWithCalibratedWhite_alpha_(0.055 if not hovered else 0.08, 1.0 * ka).setFill()
+        """Carte du système : fond clair, filet 1 px, rien d'autre.
+
+        Le halo radial, la nappe montante et le grain qui étaient ici sont
+        exactement ce que le brand book range sous « la profondeur ne vient pas
+        d'un aplat de couleur ». Ce qui détache la carte, c'est son filet.
+        """
+        path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+            rect, theme.RAYON_CARTE, theme.RAYON_CARTE)
+        theme.ns(theme.CARTE if hovered else theme.FOND_PUR, ka).setFill()
         path.fill()
-        ctx = NSGraphicsContext.currentContext()
-        ctx.saveGraphicsState()
-        path.addClip()
-        # aura : halo radial centré en bas, + nappe horizontale
-        strength = (0.95 if hovered else 0.75) * ka
-        c = lambda a: NSColor.colorWithCalibratedRed_green_blue_alpha_(r, g, b, a)
-        # halo radial : centre sous le bord bas, décroissance douce (paliers eased)
-        stops = [c(0.90 * strength), c(0.55 * strength), c(0.28 * strength), c(0.12 * strength), c(0.04 * strength), c(0.0)]
-        glow = NSGradient.alloc().initWithColors_atLocations_colorSpace_(
-            stops, [0.0, 0.18, 0.38, 0.6, 0.82, 1.0], NSColorSpace.sRGBColorSpace())
-        w, h = rect.size.width, rect.size.height
-        gr = NSMakeRect(rect.origin.x - w * 0.15, rect.origin.y - h * 1.05, w * 1.3, h * 2.1)
-        glow.drawInRect_relativeCenterPosition_(gr, (0.0, 0.0))
-        # nappe basse très douce (lueur qui « monte »)
-        band = NSGradient.alloc().initWithColors_atLocations_colorSpace_(
-            [c(0.45 * strength), c(0.18 * strength), c(0.05 * strength), c(0.0)], [0.0, 0.35, 0.7, 1.0], NSColorSpace.sRGBColorSpace())
-        band.drawInRect_angle_(NSMakeRect(rect.origin.x, rect.origin.y, w, h * 0.8), 90.0)
-        # grain léger (points fixes, déterministes)
-        NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.05 * ka).setFill()
-        seed = int(rect.origin.x * 7 + rect.origin.y * 13)
-        for n in range(40):
-            gx = rect.origin.x + ((seed * 31 + n * 97) % int(rect.size.width))
-            gy = rect.origin.y + ((seed * 17 + n * 53) % int(rect.size.height * 0.6))
-            NSBezierPath.fillRect_(NSMakeRect(gx, gy, 1, 1))
-        ctx.restoreGraphicsState()
-        # liseré
-        NSColor.colorWithCalibratedWhite_alpha_(1.0, (0.10 if not hovered else 0.18) * ka).setStroke()
-        path.setLineWidth_(1.0)
+        theme.ns(theme.O_PETIT if copied else theme.TRAIT, ka).setStroke()
+        path.setLineWidth_(theme.FILET * (2.0 if copied else 1.0))
         path.stroke()
-        if copied:
-            c(0.95 * ka).setStroke()
-            path.stroke()
-        # contenu
+
         label = (item.get("app") or "Dictée").upper()
-        la = _attrs(11, 0.55 * ka, weight=0.5)
-        _draw_text(label, NSMakeRect(rect.origin.x + 16, rect.origin.y + rect.size.height - 30, rect.size.width - 90, 14), la)
+        _draw_text(label, NSMakeRect(rect.origin.x + 16, rect.origin.y + rect.size.height - 30,
+                                     rect.size.width - 90, 14),
+                   _attrs(10.5, ka, weight=600, color=theme.ns(theme.ENCRE_3, ka)))
         right = "Copié" if copied else item.get("when", "")
-        ra = _attrs(11, (0.95 if copied else 0.45) * ka, weight=0.5)
-        if copied:
-            ra = dict(ra); ra[NSForegroundColorAttributeName] = c(0.95 * ka)
+        ra = _attrs(10.5, ka, weight=600,
+                    color=theme.ns(theme.O_PETIT if copied else theme.ENCRE_3, ka))
         rw = _text_width(right, ra)
-        _draw_text(right, NSMakeRect(rect.origin.x + rect.size.width - 16 - rw, rect.origin.y + rect.size.height - 30, rw + 2, 14), ra)
-        ta = _attrs(13.5, 0.95 * ka, weight=0.3)
-        _draw_text(item.get("text", ""), NSMakeRect(rect.origin.x + 16, rect.origin.y + 16, rect.size.width - 32, 40), ta)
-        # numéro (raccourci) en bas à droite, très discret
-        na = _attrs(10, 0.30 * ka, weight=0.5)
-        _draw_text(str(idx + 1), NSMakeRect(rect.origin.x + rect.size.width - 24, rect.origin.y + 12, 12, 12), na)
+        _draw_text(right, NSMakeRect(rect.origin.x + rect.size.width - 16 - rw,
+                                     rect.origin.y + rect.size.height - 30, rw + 2, 14), ra)
+        _draw_text(item.get("text", ""), NSMakeRect(rect.origin.x + 16, rect.origin.y + 16,
+                                                    rect.size.width - 32, 40),
+                   _attrs(13.5, ka, color=theme.ns(theme.ENCRE, ka)))
+        _draw_text(str(idx + 1), NSMakeRect(rect.origin.x + rect.size.width - 24,
+                                            rect.origin.y + 12, 12, 12),
+                   _attrs(10, ka, weight=600, color=theme.ns(theme.ENCRE_3, 0.7 * ka)))
 
     @objc.python_method
     def _draw_orb(self, cx, cy, d, k):

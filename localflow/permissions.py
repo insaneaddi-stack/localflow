@@ -42,14 +42,15 @@ from Foundation import NSObject
 
 from AppKit import NSForegroundColorAttributeName
 
+from . import theme
 from .overlay import _attrs, _draw_text, _encre
 
-BG = 0.045
+# BG a disparu : le fond vient de theme.FOND (le crème du système).
 W, H = 620.0, 0.0   # H calculée selon le nombre de lignes
 ROW_H = 92.0
-GREEN = (0.35, 0.95, 0.55)
-REDC = (1.0, 0.35, 0.35)
-AMBER = (1.0, 0.72, 0.30)
+GREEN = theme.ENCRE_2      # accordé : rien à faire, donc pas d'accent
+REDC = theme.O_VITRINE     # manquant : ce qui demande de l'attention
+AMBER = theme.O_PETIT      # en attente
 
 PANES = {
     "accessibility": "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
@@ -123,7 +124,7 @@ class _PermRow(NSView):
     def drawRect_(self, r):
         b = self.bounds()
         path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(0.5, 0.5, b.size.width - 1, b.size.height - 1), 16, 16)
-        NSColor.colorWithCalibratedWhite_alpha_(0.06, 1.0).setFill(); path.fill()
+        theme.ns(theme.FOND_PUR).setFill(); path.fill()
         col = GREEN if self.ok else (AMBER if self.pending else REDC)
         c = lambda a: NSColor.colorWithCalibratedRed_green_blue_alpha_(col[0], col[1], col[2], a)
         (c(0.6) if self.ok else _encre(0.08)).setStroke(); path.setLineWidth_(1.0); path.stroke()
@@ -140,7 +141,7 @@ class _PermRow(NSView):
 
 class _PermBackdrop(NSView):
     def drawRect_(self, r):
-        NSColor.colorWithCalibratedWhite_alpha_(BG, 1.0).setFill()
+        theme.ns(theme.FOND).setFill()
         NSBezierPath.fillRect_(self.bounds())
 
 
@@ -176,8 +177,11 @@ class PermissionsWindow(NSObject):
         win.setTitleVisibility_(NSWindowTitleHidden)
         win.setTitlebarAppearsTransparent_(True)
         win.setMovableByWindowBackground_(True)
-        win.setAppearance_(NSAppearance.appearanceNamed_("NSAppearanceNameDarkAqua"))
-        win.setBackgroundColor_(NSColor.colorWithCalibratedWhite_alpha_(BG, 1.0))
+        # Apparence claire imposée : la fenêtre est crème, un Aqua sombre
+        # repeindrait les contrôles natifs (barres de défilement, champs,
+        # curseur de saisie) en clair sur clair.
+        win.setAppearance_(NSAppearance.appearanceNamed_("NSAppearanceNameAqua"))
+        win.setBackgroundColor_(theme.ns(theme.FOND))
         win.setReleasedWhenClosed_(False)
         win.setLevel_(8)   # au-dessus des fenêtres normales : on ne la perd pas derrière les Réglages
         win.setDelegate_(self)
@@ -193,10 +197,10 @@ class PermissionsWindow(NSObject):
         except Exception:
             pass
         t = NSTextField.labelWithString_("Deux autorisations, une seule fois")
-        t.setFrame_(NSMakeRect(98, h - 70, W - 120, 28)); t.setFont_(NSFont.systemFontOfSize_weight_(20, 0.6)); t.setTextColor_(_encre(0.96))
+        t.setFrame_(NSMakeRect(98, h - 70, W - 120, 28)); t.setFont_(theme.font(21, 600, serif=True)); t.setTextColor_(_encre(0.96))
         content.addSubview_(t)
         st = NSTextField.labelWithString_("macOS exige un clic de ta part pour chacune. Cette fenêtre se ferme toute seule quand c'est fait.")
-        st.setFrame_(NSMakeRect(98, h - 94, W - 120, 18)); st.setFont_(NSFont.systemFontOfSize_(12)); st.setTextColor_(_encre(0.5))
+        st.setFrame_(NSMakeRect(98, h - 94, W - 120, 18)); st.setFont_(theme.font(12)); st.setTextColor_(_encre(0.5))
         content.addSubview_(st)
         y = h - 130
         self.rows, self.buttons = [], []
@@ -212,7 +216,7 @@ class PermissionsWindow(NSObject):
             content.addSubview_(b)
             self.rows.append(row); self.buttons.append(b)
         self.footer = NSTextField.labelWithString_("")
-        self.footer.setFrame_(NSMakeRect(28, 18, W - 56, 18)); self.footer.setFont_(NSFont.systemFontOfSize_(11.5)); self.footer.setTextColor_(_encre(0.45))
+        self.footer.setFrame_(NSMakeRect(28, 18, W - 56, 18)); self.footer.setFont_(theme.font(11.5)); self.footer.setTextColor_(_encre(0.45))
         content.addSubview_(self.footer)
         self.window = win
 

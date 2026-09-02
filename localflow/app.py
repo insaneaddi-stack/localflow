@@ -43,12 +43,9 @@ from .overlay import Overlay
 from .permissions import PermissionsWindow
 from .paste import copy_text, paste_text, press_undo, type_text
 
-ICON_LOADING = "⏳"
-ICON_IDLE = "🎙"
-ICON_RECORDING = "🔴"
-ICON_HANDS_FREE = "🔴∞"
-ICON_PROCESSING = "💭"
-ICON_MEETING = "🎙●"
+# La barre de menus portait des emoji — le dessin de quelqu'un d'autre.
+# Elle porte maintenant le monogramme, et l'état se lit à la forme du signe
+# posé dessous (voir theme.menubar_icon).
 OFFER_TIMEOUT_S = 25     # la proposition « enregistrer la réunion ? » disparaît toute seule
 
 TAP_MAX_S = 0.3          # en dessous : c'est un tap, pas un push-to-talk
@@ -163,7 +160,9 @@ def job_aborted(gen, abort_gen):
 
 class LocalFlowApp(rumps.App):
     def __init__(self):
-        super().__init__(ICON_LOADING, quit_button=None)
+        super().__init__("", quit_button=None)
+        self._icon_state = None
+        self._set_icon("loading")
         self.config = Config()
         sounds.preload()          # en RAM tout de suite : le premier fn ne doit rien attendre
         self.recorder = Recorder()
@@ -265,6 +264,7 @@ class LocalFlowApp(rumps.App):
             self.item_auto_update,
             rumps.MenuItem("Quitter", callback=rumps.quit_application),
         ]
+        self._brand_menu()
         self._refresh_stats()
 
         self.history_window = HistoryWindow.alloc().initWithConfig_notify_(self.config, _notify)
@@ -363,6 +363,57 @@ class LocalFlowApp(rumps.App):
         else:
             self._check_update(notify_if_none=True)
 
+    def _brand_menu(self):
+        """Passe le menu natif dans les caractères du système.
+
+        Un NSMenu accepte un titre attribué : on y met Figtree, l'encre chaude
+        pour les entrées, l'orange du système pour la ligne d'état. Sans ça le
+        menu reste la seule surface de l'app à parler la langue de macOS et pas
+        la nôtre — ce que le point de vue de l'utilisateur voit en premier.
+        """
+        try:
+            entetes = {id(self.item_status)}
+            def parcourir(menu, profondeur=0):
+                for item in list(menu.values()):
+                    # Les séparateurs sont des SeparatorMenuItem : pas de titre,
+                    # rien à habiller.
+                    titre = getattr(item, "title", None)
+                    ns_item = getattr(item, "_menuitem", None)
+                    if ns_item is not None and isinstance(titre, str) and titre:
+                        if id(item) in entetes:
+                            att = theme.attributed(titre, 12.0, 600,
+                                                   color=theme.ns(theme.O_PETIT))
+                        else:
+                            att = theme.attributed(titre, 13.0, 400,
+                                                   color=theme.ns(theme.ENCRE))
+                        ns_item.setAttributedTitle_(att)
+                    sub = getattr(item, "_menu", None)
+                    if sub is not None and profondeur < 2:
+                        parcourir(item, profondeur + 1)
+            parcourir(self.menu)
+        except Exception:
+            _log("menu : titres de marque non appliqués\n" + traceback.format_exc())
+
+    def _set_icon(self, state):
+        """Pose le monogramme dans la barre de menus. Le texte reste vide.
+
+        Si le rendu échoue (monogramme absent, cache non inscriptible), on
+        retombe sur le nom du produit plutôt que sur une barre vide.
+        """
+        if state == self._icon_state:
+            return
+        self._icon_state = state
+        path = theme.menubar_icon(state)
+        try:
+            if path:
+                self.icon = path
+                self.title = ""
+            else:
+                self.icon = None
+                self.title = theme.NOM
+        except Exception:
+            self.title = theme.NOM
+
     def _toggle_item(self, title, key, extra=None):
         def cb(item):
             item.state = not item.state
@@ -399,7 +450,7 @@ class LocalFlowApp(rumps.App):
                 delay = min(delay * 2, 60)
 
         def ready():
-            self.title = self._idle_icon()
+            self._set_icon(self._idle_state())
             self.item_status.title = "Prêt — maintenir fn, ou fn+espace"
             first = not self.config.data.get("onboarded")
             if self.perms.missing():
@@ -532,7 +583,7 @@ class LocalFlowApp(rumps.App):
         self._suppress_next_release = True
         self._cancel_start_sound_timer()
         self._play(SOUND_START)
-        self.title = ICON_HANDS_FREE
+        self._set_icon("hands_free")
         _log("mains-libres activé")
         self.tutorial.event("handsfree")
 
@@ -668,21 +719,21 @@ class LocalFlowApp(rumps.App):
                 _log("santé: pipeline coincé, déblocage forcé")
                 self._busy = False
                 self.overlay.hide()
-                self.title = self._idle_icon()
+                self._set_icon(self._idle_state())
 
             self._meeting_health()
 
             active = self.recorder.recording or self._busy
             if active:
                 self._idle_since = time.time()
-            elif self.transcriber is not None and self.title != self._idle_icon() \
+            elif self.transcriber is not None and self._icon_state != self._idle_state() \
                     and time.time() - self._idle_since > STALE_UI_S:
                 _log("santé: UI bloquée, remise à zéro")
                 self.hands_free = False
                 self._suppress_next_release = False
                 self.listener.release()
                 self.overlay.hide()
-                self.title = self._idle_icon()
+                self._set_icon(self._idle_state())
         except Exception:
             _log("erreur health_check:\n" + traceback.format_exc())
 
@@ -699,7 +750,7 @@ class LocalFlowApp(rumps.App):
             _notify("Micro indisponible", str(exc))
             return
         self._record_start = time.time()
-        self.title = ICON_RECORDING
+        self._set_icon("recording")
         self.overlay.begin_recording(hands_free=self.hands_free)
         self.overlay.show("recording")
         if live:
@@ -800,7 +851,7 @@ class LocalFlowApp(rumps.App):
             self._cancel_recording()
         else:
             self.overlay.hide()
-            self.title = self._idle_icon()
+            self._set_icon(self._idle_state())
         self._play(SOUND_STOP)
         _log("annulé (Esc)")
 
@@ -810,7 +861,7 @@ class LocalFlowApp(rumps.App):
             self._live.abort = True
         self.recorder.cancel()
         self.overlay.hide()
-        self.title = self._idle_icon()
+        self._set_icon(self._idle_state())
 
     def _finish_recording(self):
         """Laisse TAIL_S d'audio après le relâchement (le dernier mot n'est pas coupé)."""
@@ -835,16 +886,16 @@ class LocalFlowApp(rumps.App):
             if self._live is not None:
                 self._live.abort = True
             self.overlay.hide()
-            self.title = self._idle_icon()
+            self._set_icon(self._idle_state())
             return
         voiced = self.recorder.voiced_s
         if voiced < MIN_VOICED_S:
             _log(f"audio {len(audio)/SAMPLE_RATE:.2f}s mais {voiced:.2f}s de voix (bruit {20*np.log10(self.recorder.noise_floor+1e-9):.0f} dBFS) → rien entendu, ignoré")
             self.overlay.hide()
-            self.title = self._idle_icon()
+            self._set_icon(self._idle_state())
             return
         _log(f"audio {len(audio)/SAMPLE_RATE:.2f}s (voix {voiced:.1f}s, gain {self.recorder.gain_db:+.0f} dB) → transcription")
-        self.title = ICON_PROCESSING
+        self._set_icon("processing")
         self.overlay.show("processing")
         self.overlay.begin_progress(self._decode_estimate(len(audio) / SAMPLE_RATE))
         self._busy = True
@@ -969,7 +1020,7 @@ class LocalFlowApp(rumps.App):
 
                 def done():
                     self.overlay.hide()
-                    self.title = self._idle_icon()
+                    self._set_icon(self._idle_state())
 
                 _on_main(done)
 
@@ -1087,8 +1138,8 @@ class LocalFlowApp(rumps.App):
 
     # ---------- réunions ----------
 
-    def _idle_icon(self):
-        return ICON_MEETING if self.meeting_rec.active else ICON_IDLE
+    def _idle_state(self):
+        return "meeting" if self.meeting_rec.active else "idle"
 
     def _overlay_level(self):
         if self.recorder.recording:
@@ -1186,7 +1237,7 @@ class LocalFlowApp(rumps.App):
             _notify("Réunion", f"Impossible de démarrer : {exc}")
             return
         self.item_meet_start.title = "■ Arrêter la réunion"
-        self.title = self._idle_icon()
+        self._set_icon(self._idle_state())
         self.overlay.set_meeting(True)
         self.overlay.refresh()
         self.live_window.show(m)
@@ -1217,7 +1268,7 @@ class LocalFlowApp(rumps.App):
         self.item_meet_start.title = "Démarrer une réunion"
         self.overlay.set_meeting(False)
         self.overlay.refresh()
-        self.title = self._idle_icon()
+        self._set_icon(self._idle_state())
         self.live_window.close()
 
     def _meeting_stop(self):

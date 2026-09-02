@@ -43,6 +43,7 @@ from AppKit import (
 )
 from Foundation import NSObject
 
+from . import theme
 from .overlay import _BandView, _attrs, _draw_text, _text_width, _encre
 from .paste import copy_text
 
@@ -50,7 +51,7 @@ W, H = 760.0, 700.0
 STATS_H = 150.0
 M = 28.0
 ROW_H = 66.0
-BG = 0.045
+# BG a disparu : le fond vient de theme.FOND (le crème du système).
 
 def _fmt_time(iso):
     try:
@@ -134,24 +135,19 @@ class _ListView(NSView):
             rect = NSMakeRect(M, y + 4, w - 2 * M, ROW_H - 8)
             hovered = self.hover_pt is not None and NSPointInRect(self.hover_pt, rect)
             copied = self.flash_index == i and time.time() - self.flash_t0 < 1.2
-            r, g, b = _BandView.AURAS["default"] if not hasattr(_BandView, "AURAS") else _BandView._aura_color(_BandView, e.get("app", ""))
-            c = lambda a: NSColor.colorWithCalibratedRed_green_blue_alpha_(r, g, b, a)
-            path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(rect, 14, 14)
-            NSColor.colorWithCalibratedWhite_alpha_(0.075 if hovered else 0.06, 1.0).setFill()
+            # Chaque ligne portait une aura colorée montant de la gauche, teintée
+            # par app. Le système l'exclut deux fois : « une seule action colorée
+            # par écran » et « jamais une lueur ». Reste le filet, qui suffit —
+            # et l'orange est gardé pour ce qui vient d'être copié.
+            c = lambda a: theme.ns(theme.O_PETIT, a)
+            path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+                rect, theme.RAYON_CARTE, theme.RAYON_CARTE)
+            theme.ns(theme.CARTE if hovered else theme.FOND_PUR).setFill()
             path.fill()
-            # aura : à gauche, discrète (plus forte au survol)
-            from AppKit import NSGraphicsContext
-            ctx = NSGraphicsContext.currentContext(); ctx.saveGraphicsState(); path.addClip()
-            st = 0.55 if hovered else 0.32
-            grad = NSGradient.alloc().initWithColors_atLocations_colorSpace_(
-                [c(0.9 * st), c(0.35 * st), c(0.08 * st), c(0.0)], [0.0, 0.3, 0.65, 1.0], NSColorSpace.sRGBColorSpace())
-            grad.drawInRect_relativeCenterPosition_(NSMakeRect(rect.origin.x - 120, rect.origin.y - 60, 300, rect.size.height + 120), (0.0, 0.0))
-            ctx.restoreGraphicsState()
-            _encre(0.14 if hovered else 0.07).setStroke(); path.setLineWidth_(1.0); path.stroke()
-            if copied:
-                c(0.95).setStroke(); path.stroke()
-            # témoin couleur
-            c(0.95).setFill()
+            theme.ns(theme.O_PETIT if copied else theme.TRAIT).setStroke()
+            path.setLineWidth_(theme.FILET * (2.0 if copied else 1.0))
+            path.stroke()
+            theme.ns(theme.O_VITRINE if copied else theme.ENCRE_3, 0.9).setFill()
             NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(rect.origin.x + 18, rect.origin.y + rect.size.height / 2 - 4, 8, 8)).fill()
             # textes
             label = (e.get("app") or "Dictée").upper()
@@ -185,7 +181,7 @@ class _StatsView(NSView):
         left_w = w * 0.58
         # carte de fond
         card = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(M, 8, w - 2 * M, b.size.height - 16), 16, 16)
-        NSColor.colorWithCalibratedWhite_alpha_(0.06, 1.0).setFill(); card.fill()
+        theme.ns(theme.FOND_PUR).setFill(); card.fill()
         _encre(0.07).setStroke(); card.setLineWidth_(1.0); card.stroke()
 
         _draw_text("CETTE SEMAINE", NSMakeRect(M + 18, b.size.height - 34, 200, 14), _attrs(10.5, 0.5, weight=0.5))
@@ -201,9 +197,11 @@ class _StatsView(NSView):
             x = area_x + i * (bw + gap)
             h = max(3.0, words / maxv * max_h) if words else 3.0
             is_today = d == today
-            r_, g_, b_ = _BandView.AURAS["default"]
-            top = NSColor.colorWithCalibratedRed_green_blue_alpha_(r_, g_, b_, 0.95 if is_today else 0.55)
-            bot = NSColor.colorWithCalibratedRed_green_blue_alpha_(r_, g_, b_, 0.25 if is_today else 0.10)
+            # Le jour courant porte l'orange, les autres restent au trait : une
+            # seule chose colorée à la fois, et c'est celle qui compte.
+            teinte = theme.O_VITRINE if is_today else theme.TRAIT_FORT
+            top = theme.ns(teinte, 0.95)
+            bot = theme.ns(teinte, 0.55 if is_today else 0.85)
             path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(x, base_y, bw, h), 5, 5)
             NSGradient.alloc().initWithStartingColor_endingColor_(bot, top).drawInBezierPath_angle_(path, 90.0)
             if words:
@@ -225,8 +223,7 @@ class _StatsView(NSView):
         if not self.apps:
             _draw_text("Pas encore de dictée cette semaine.", NSMakeRect(rx, y, 240, 16), _attrs(12, 0.45))
         for app, cnt in self.apps:
-            r_, g_, b_ = _BandView._aura_color(_BandView, app)
-            NSColor.colorWithCalibratedRed_green_blue_alpha_(r_, g_, b_, 0.95).setFill()
+            theme.ns(theme.ENCRE_3, 0.9).setFill()
             NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(rx, y + 4, 8, 8)).fill()
             _draw_text(app, NSMakeRect(rx + 16, y, 180, 16), _attrs(12.5, 0.92))
             ca = _attrs(11, 0.45); cw = _text_width(f"{cnt}", ca)
@@ -236,7 +233,7 @@ class _StatsView(NSView):
 
 class _Backdrop(NSView):
     def drawRect_(self, r):
-        NSColor.colorWithCalibratedWhite_alpha_(BG, 1.0).setFill()
+        theme.ns(theme.FOND).setFill()
         NSBezierPath.fillRect_(self.bounds())
 
 class HistoryWindow(NSObject):
@@ -257,8 +254,11 @@ class HistoryWindow(NSObject):
         win.setTitleVisibility_(NSWindowTitleHidden)
         win.setTitlebarAppearsTransparent_(True)
         win.setMovableByWindowBackground_(True)
-        win.setAppearance_(NSAppearance.appearanceNamed_("NSAppearanceNameDarkAqua"))
-        win.setBackgroundColor_(NSColor.colorWithCalibratedWhite_alpha_(BG, 1.0))
+        # Apparence claire imposée : la fenêtre est crème, un Aqua sombre
+        # repeindrait les contrôles natifs (barres de défilement, champs,
+        # curseur de saisie) en clair sur clair.
+        win.setAppearance_(NSAppearance.appearanceNamed_("NSAppearanceNameAqua"))
+        win.setBackgroundColor_(theme.ns(theme.FOND))
         win.setReleasedWhenClosed_(False)
         win.setDelegate_(self)
         win.setMinSize_((560, 360))
@@ -275,7 +275,7 @@ class HistoryWindow(NSObject):
         self.search.setPlaceholderString_("Rechercher…")
         self.search.setTarget_(self); self.search.setAction_("searchChanged:")
         self.search.setAutoresizingMask_(NSViewMinYMargin)
-        self.search.setFont_(NSFont.systemFontOfSize_(13))
+        self.search.setFont_(theme.font(13))
         self.search.setFocusRingType_(1)  # none
         content.addSubview_(self.search)
 
@@ -346,7 +346,7 @@ class _Header(NSView):
 
     def drawRect_(self, r):
         b = self.bounds()
-        _draw_text(self.title, NSMakeRect(M, b.size.height - 62, 300, 28), _attrs(22, 0.96, weight=0.6))
+        _draw_text(self.title, NSMakeRect(M, b.size.height - 62, 300, 28), _attrs(22, 0.96, weight=600, serif=True))
         _draw_text(self.subtitle, NSMakeRect(M, b.size.height - 80, b.size.width - 2 * M, 16), _attrs(11.5, 0.42))
         ca = _attrs(11.5, 0.42)
         cw = _text_width(self.count, ca)

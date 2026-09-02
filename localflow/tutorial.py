@@ -32,6 +32,7 @@ from AppKit import (
     NSWindowStyleMaskNonactivatingPanel,
 )
 
+from . import theme
 from .overlay import _BandView, _attrs, _draw_text, _text_width, _orange, _encre, MARGINS, IDLE_H
 
 CARD_W, CARD_H = 520.0, 150.0
@@ -126,10 +127,10 @@ class _TutorialView(NSView):
         card = NSMakeRect(cx - CARD_W / 2, t.card_y, CARD_W, CARD_H)
         path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(card, 22, 22)
         for dy, grow, a in ((-4, 12, 0.10), (-2, 6, 0.14)):   # ombre douce
-            NSColor.colorWithCalibratedWhite_alpha_(0.0, a * k).setFill()
+            theme.ns(theme.ENCRE, a * k * 0.55).setFill()
             NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
                 NSMakeRect(card.origin.x - grow, card.origin.y - grow + dy, CARD_W + 2 * grow, CARD_H + 2 * grow), 22 + grow, 22 + grow).fill()
-        NSColor.colorWithCalibratedWhite_alpha_(0.05, 0.97 * k).setFill()
+        theme.ns(theme.FOND, 0.99 * k).setFill()
         path.fill()
         _encre(0.14 * k).setStroke(); path.setLineWidth_(1.0); path.stroke()
         # aura violette discrète en bas de la carte
@@ -145,7 +146,7 @@ class _TutorialView(NSView):
         ox, oy = card.origin.x + 38, card.origin.y + CARD_H - 46
         _BandView._draw_orb(self, ox, oy, orb_d, k)
         tx = card.origin.x + 76
-        _draw_text(step["title"], NSMakeRect(tx, card.origin.y + CARD_H - 44, CARD_W - 96, 22), _attrs(15.5, 0.96 * k, weight=0.6))
+        _draw_text(step["title"], NSMakeRect(tx, card.origin.y + CARD_H - 44, CARD_W - 96, 22), _attrs(17, 0.96, serif=True, * k, weight=0.6))
         y = card.origin.y + CARD_H - 70
         for line in step["lines"]:
             _draw_text(line, NSMakeRect(tx, y, CARD_W - 96, 17), _attrs(12.5, 0.85 * k))
