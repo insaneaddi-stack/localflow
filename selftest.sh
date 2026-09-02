@@ -20,6 +20,17 @@ NAME="log : pas de traceback depuis le dernier démarrage"; t $PY -c "
 import os,re; L=open(os.path.expanduser('~/.localflow.log')).read().splitlines(); i=max([k for k,l in enumerate(L) if 'démarrage:' in l] or [0]); bad=[l for l in L[i:] if 'Traceback' in l or 'CRASH' in l or 'erreur' in l.lower()]; print('\n'.join(bad[-5:])); assert not bad"
 NAME="syntaxe (py_compile)";          t $PY -m py_compile localflow/*.py
 NAME="imports de tous les modules";   t $PY -c "import localflow.app, localflow.meeting_window, localflow.meeting, localflow.summarize, localflow.sysaudio, localflow.meeting_detect, localflow.tutorial, localflow.history_window"
+NAME="fiabilité : boucle de plantage signalée une seule fois"; t $PY -c "
+import os, localflow.app as A
+os.path.exists(A.CRASH_FILE) and os.remove(A.CRASH_FILE)
+vus = []
+A._notify = lambda t, m: vus.append(t)
+for _ in range(6):
+    try: raise RuntimeError('test')
+    except Exception: A._signal_boucle_de_plantage()
+os.path.exists(A.CRASH_FILE) and os.remove(A.CRASH_FILE)
+assert vus == ['AUR\'IAFLOW ne démarre plus'], vus"
+NAME="fiabilité : run.sh protège l'app qui tourne"; t sh -c 'grep -q preflight run.sh && grep -q wait_idle run.sh && bash -n run.sh'
 NAME="nettoyage : corpus de dictées";  t $PY -m unittest discover -s tests -q
 NAME="bash -n des scripts";           t bash -n install.sh setup.sh build-app.sh install-agent.sh run.sh update.sh uninstall.sh helpers/audiotap/build.sh
 NAME="helper audiotap présent";       t test -x helpers/audiotap/audiotap

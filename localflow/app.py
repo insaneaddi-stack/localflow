@@ -74,7 +74,12 @@ HEALTH_EVERY_S = 2
 MIC_LINGER_S = 15        # micro gardé ouvert après une dictée (enchaînements sans latence), puis fermé
 STALE_UI_S = 8       # overlay/icône restés bloqués sans enregistrement ni traitement
 KEEP_WARM_S = 30     # au repos : micro-inférence périodique pour que macOS ne swappe pas le modèle
-SLOW_S = 3.0         # au-delà, on note l'état mémoire dans le log (diagnostic)
+# Un seuil ABSOLU criait au loup : une dictée de 45 s met légitimement 5 s à
+# décoder. Mesuré sur 943 dictées, les lignes « LENT » avaient un meilleur
+# rapport temps/audio (0,125) que les normales (0,158) — 115 fausses alertes
+# sur 117. On compare donc au temps ATTENDU, qui est déjà calibré sur la machine.
+SLOW_FACTOR = 2.5    # au-delà de 2,5 × l'estimation, c'est une vraie anomalie
+SLOW_FLOOR_S = 2.0   # et jamais en dessous de 2 s, pour ne pas pinailler
 
 try:
     _log_file = open(LOG_PATH, "a")
@@ -368,35 +373,27 @@ class LocalFlowApp(rumps.App):
             self._check_update(notify_if_none=True)
 
     def _brand_menu(self):
-        """Passe le menu natif dans les caractères du système.
+        """Donne au menu natif nos propres vues.
 
-        Un NSMenu accepte un titre attribué : on y met Figtree, l'encre chaude
-        pour les entrées, l'orange du système pour la ligne d'état. Sans ça le
-        menu reste la seule surface de l'app à parler la langue de macOS et pas
-        la nôtre — ce que le point de vue de l'utilisateur voit en premier.
+        Les titres attribués ne suffisaient pas : le fond, la surbrillance, les
+        marges et la coche restaient ceux de macOS, et le menu continuait d'être
+        la seule surface à ne pas appartenir à la marque. `localflow.menu`
+        redessine chaque ligne — et gère lui-même surbrillance et clic, que
+        macOS n'assure plus dès qu'une vue est posée.
         """
         try:
-            entetes = {id(self.item_status)}
-            def parcourir(menu, profondeur=0):
-                for item in list(menu.values()):
-                    # Les séparateurs sont des SeparatorMenuItem : pas de titre,
-                    # rien à habiller.
-                    titre = getattr(item, "title", None)
-                    ns_item = getattr(item, "_menuitem", None)
-                    if ns_item is not None and isinstance(titre, str) and titre:
-                        if id(item) in entetes:
-                            att = theme.attributed(titre, 12.0, 600,
-                                                   color=theme.ns(theme.O_PETIT))
-                        else:
-                            att = theme.attributed(titre, 13.0, 400,
-                                                   color=theme.ns(theme.ENCRE))
-                        ns_item.setAttributedTitle_(att)
-                    sub = getattr(item, "_menu", None)
-                    if sub is not None and profondeur < 2:
-                        parcourir(item, profondeur + 1)
-            parcourir(self.menu)
+            from . import menu as brand_menu
+
+            # rumps range le NSMenu dans son objet Menu : App.menu → Menu,
+            # Menu._menu → NSMenu.
+            ns_menu = getattr(self.menu, "_menu", None)
+            if ns_menu is None:
+                return
+            n = brand_menu.habiller(ns_menu, lambda: self.item_status.title)
+            _log(f"menu : {n} entrées habillées")
         except Exception:
-            _log("menu : titres de marque non appliqués\n" + traceback.format_exc())
+            _log("menu : habillage impossible, on garde le menu système\n"
+                 + traceback.format_exc())
 
     def _mark_busy(self, busy):
         """Pose ou retire le témoin « dictée en cours ». Ne lève jamais."""
@@ -444,11 +441,38 @@ class LocalFlowApp(rumps.App):
 
     # ---------- worker ----------
 
+    def _repair_model_cache(self):
+        """Efface les téléchargements interrompus du cache Hugging Face.
+
+        `IncompleteSnapshotError` était la deuxième cause d'échec de démarrage du
+        moteur dans le log (14 occurrences) : un téléchargement coupé laisse des
+        fichiers `.incomplete`, et réessayer en boucle ne les répare pas — il
+        faut les retirer pour que le téléchargement reprenne. On ne touche qu'à
+        ces fichiers-là : les poids déjà complets ne sont jamais retéléchargés.
+        """
+        import glob
+
+        efface = 0
+        for base in (os.path.expanduser("~/.cache/huggingface/hub"),
+                     os.environ.get("HF_HOME", "")):
+            if not base or not os.path.isdir(base):
+                continue
+            for f in glob.glob(os.path.join(base, "**", "*.incomplete"), recursive=True):
+                try:
+                    taille = os.path.getsize(f)
+                    os.remove(f)
+                    efface += 1
+                    _log(f"cache modèle : fragment incomplet retiré ({taille // 1024} Ko)")
+                except OSError:
+                    pass
+        return efface
+
     def _worker(self):
         """Thread de traitement. Ne meurt jamais : relance le chargement du
         modèle en cas d'échec, et survit à toute erreur d'un job."""
         delay = 5
         notified = False
+        repare = False
         while self.transcriber is None:
             try:
                 from .transcribe import Transcriber
@@ -456,6 +480,15 @@ class LocalFlowApp(rumps.App):
                 self.transcriber = Transcriber()
             except Exception as exc:
                 _log("échec chargement du moteur:\n" + traceback.format_exc())
+                # Une seule tentative de réparation : si elle ne suffit pas, le
+                # problème est ailleurs (réseau, disque plein) et effacer en
+                # boucle ne ferait que retélécharger sans fin.
+                if not repare and "Incomplete" in type(exc).__name__:
+                    repare = True
+                    if self._repair_model_cache():
+                        _log("cache modèle réparé, nouvelle tentative immédiate")
+                        delay = 5
+                        continue
                 # Une seule notification : la boucle peut tourner des heures (modèle en
                 # cours de téléchargement, disque plein…), inutile de noyer le Centre de
                 # notifications. L'état reste visible dans le menu et dans le log.
@@ -477,6 +510,10 @@ class LocalFlowApp(rumps.App):
 
         _on_main(ready)
         _log(f"démarrage: moteur {self.transcriber.name} chargé, prêt")
+        try:
+            os.remove(CRASH_FILE)      # démarrage réussi : l'ardoise est effacée
+        except OSError:
+            pass
 
         # Qwen se charge après le « prêt » : la première dictée n'attend pas.
         if self.config.cleanup_enabled:
@@ -1014,9 +1051,11 @@ class LocalFlowApp(rumps.App):
                 # Le texte dicté n'est PAS écrit dans le log (vie privée).
                 retry = getattr(self.transcriber, "last_retry", "")
                 dt = time.time() - t0
+                attendu = self._decode_estimate(seconds)
                 _log(f"{how} en {dt:.1f}s via {source} ({words} mots, ton {tone}, app {app_name or '?'})"
                      + (f" — 2e passe : {retry}" if retry else "")
-                     + (f" — LENT : {_mem_state()}" if dt > SLOW_S else ""))
+                     + (f" — LENT : {dt:.1f}s pour {attendu:.1f}s attendus — {_mem_state()}"
+                        if dt > max(SLOW_FLOOR_S, SLOW_FACTOR * attendu) else ""))
             else:
                 _log("transcription vide, rien à coller")
         except Exception as exc:
@@ -1373,7 +1412,50 @@ def main():
         LocalFlowApp().run()
     except Exception:
         _log("CRASH:\n" + traceback.format_exc())
+        _signal_boucle_de_plantage()
         raise
+
+
+CRASH_FILE = os.path.expanduser("~/Library/Caches/LocalFlow/crashes")
+CRASH_FENETRE_S = 300      # trois échecs en cinq minutes = ça ne démarre plus
+CRASH_SEUIL = 3
+CRASH_SILENCE_S = 600      # une notification au plus toutes les dix minutes
+
+
+def _signal_boucle_de_plantage():
+    """Prévient quand l'app ne démarre plus du tout.
+
+    KeepAlive relance l'agent toutes les 5 secondes : une erreur au démarrage
+    devient une boucle silencieuse. Le 2 septembre elle a tourné 50 minutes sans
+    que rien ne le dise — on s'en aperçoit en essayant de dicter, c'est-à-dire
+    trop tard. Trois échecs en cinq minutes déclenchent une notification, avec
+    la dernière ligne de l'erreur : de quoi savoir quoi faire sans ouvrir le log.
+    """
+    try:
+        os.makedirs(os.path.dirname(CRASH_FILE), exist_ok=True)
+        now = time.time()
+        try:
+            with open(CRASH_FILE) as f:
+                vals = [float(x) for x in f.read().split()]
+        except (OSError, ValueError):
+            vals = []
+        recents = [t for t in vals if now - t < CRASH_FENETRE_S]
+        recents.append(now)
+        dernier_avis = max((t for t in vals if t < 0), default=0.0)
+        with open(CRASH_FILE, "w") as f:
+            f.write(" ".join(f"{t:.0f}" for t in recents[-10:]))
+            if dernier_avis:
+                f.write(f" {dernier_avis:.0f}")
+        if len(recents) < CRASH_SEUIL:
+            return
+        if now + dernier_avis < CRASH_SILENCE_S:   # dernier_avis est stocké négatif
+            return
+        ligne = (traceback.format_exc().strip().splitlines() or ["erreur inconnue"])[-1]
+        _notify("AUR'IAFLOW ne démarre plus", ligne[:180])
+        with open(CRASH_FILE, "w") as f:
+            f.write(" ".join(f"{t:.0f}" for t in recents[-10:]) + f" {-now:.0f}")
+    except Exception:
+        pass
 
 if __name__ == "__main__":
     main()

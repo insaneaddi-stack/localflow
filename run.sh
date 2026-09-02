@@ -17,8 +17,24 @@ wait_idle() {
   done
 }
 
+# Vérification avant de tuer l'app qui tourne : si le nouveau code ne s'importe
+# même pas, la relancer remplace une app qui marche par une boucle de plantage.
+# C'est arrivé le 2 septembre — 50 minutes de dictée hors service.
+preflight() {
+  . ./env.sh 2>/dev/null
+  if ! .venv/bin/python -c "import localflow.app" >/tmp/localflow-preflight.log 2>&1; then
+    echo "❌ le code ne s'importe pas — l'app qui tourne n'est PAS touchée :"
+    tail -5 /tmp/localflow-preflight.log | sed 's/^/   /'
+    echo "   (./run.sh --force pour passer outre)"
+    return 1
+  fi
+}
+
 if launchctl print "gui/$(id -u)/$AGENT" >/dev/null 2>&1; then
-  [ "${1:-}" = "--force" ] || wait_idle
+  if [ "${1:-}" != "--force" ]; then
+    preflight || exit 1
+    wait_idle
+  fi
   launchctl kickstart -k "gui/$(id -u)/$AGENT" && echo "LocalFlow (re)lancé via LaunchAgent — logs : ~/.localflow*.log"
 elif [ -f "$PLIST" ]; then
   launchctl bootstrap "gui/$(id -u)" "$PLIST" && echo "LocalFlow lancé via LaunchAgent — logs : ~/.localflow*.log"
