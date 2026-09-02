@@ -7,7 +7,7 @@ import os
 CONFIG_PATH = os.path.expanduser("~/.localflow.json")
 
 DEFAULTS = {
-    "cleanup_enabled": False,    # Qwen : +1 s ; Qwen3-ASR sort déjà un texte ponctué
+    "cleanup_enabled": False,    # Qwen : +0,8 s ; Qwen3-ASR sort déjà un texte ponctué
     "sounds_enabled": True,
     "live_enabled": False,       # transcription en direct (streaming)
     "live_paste_fast": False,    # coller le texte du direct : Qwen3-ASR décode par blocs et

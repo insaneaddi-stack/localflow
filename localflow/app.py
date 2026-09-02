@@ -930,7 +930,7 @@ class LocalFlowApp(rumps.App):
             "tiles": [
                 {"title": "Historique", "subtitle": f"{t['dictations']} dictées aujourd'hui", "color": (0.55, 0.40, 1.00),
                  "icon": "clock.arrow.circlepath", "on": True, "action": "history"},
-                {"title": "Nettoyage IA", "subtitle": "Activé · +1 s" if self.config.cleanup_enabled else "Désactivé · instantané",
+                {"title": "Nettoyage IA", "subtitle": "Activé · +0,8 s" if self.config.cleanup_enabled else "Désactivé · instantané",
                  "color": (0.35, 0.95, 0.55), "icon": "wand.and.sparkles",
                  "on": self.config.cleanup_enabled, "action": "toggle", "payload": "cleanup_enabled"},
                 {"title": "Réunion", "subtitle": (f"■ Arrêter · {_fmt_ts(self.meeting_rec.meeting.duration_s)}" if self.meeting_rec.active

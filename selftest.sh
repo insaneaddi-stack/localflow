@@ -20,6 +20,7 @@ NAME="log : pas de traceback depuis le dernier démarrage"; t $PY -c "
 import os,re; L=open(os.path.expanduser('~/.localflow.log')).read().splitlines(); i=max([k for k,l in enumerate(L) if 'démarrage:' in l] or [0]); bad=[l for l in L[i:] if 'Traceback' in l or 'CRASH' in l or 'erreur' in l.lower()]; print('\n'.join(bad[-5:])); assert not bad"
 NAME="syntaxe (py_compile)";          t $PY -m py_compile localflow/*.py
 NAME="imports de tous les modules";   t $PY -c "import localflow.app, localflow.meeting_window, localflow.meeting, localflow.summarize, localflow.sysaudio, localflow.meeting_detect, localflow.tutorial, localflow.history_window"
+NAME="nettoyage : corpus de dictées";  t $PY -m unittest discover -s tests -q
 NAME="bash -n des scripts";           t bash -n install.sh setup.sh build-app.sh install-agent.sh run.sh update.sh uninstall.sh helpers/audiotap/build.sh
 NAME="helper audiotap présent";       t test -x helpers/audiotap/audiotap
 NAME="helper audiotap --probe";       t helpers/audiotap/audiotap --probe
