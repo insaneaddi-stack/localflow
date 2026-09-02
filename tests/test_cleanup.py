@@ -104,6 +104,38 @@ class Retakes(unittest.TestCase):
             self.assertEqual(cleanup_rules(raw), want, msg=raw)
 
 
+class AbandonedStart(unittest.TestCase):
+    """Amorce jetée puis phrase totalement différente : rien ne se ressemble,
+    seul le marqueur d'auto-correction en fin de phrase trahit le faux départ."""
+
+    CASES = [
+        ("Salut. Alors je voulais dire que non, pardon. Est-ce que le nettoyage fonctionne ?",
+         "Salut. Est-ce que le nettoyage fonctionne ?"),
+        ("Je pars demain, enfin non. On se voit lundi.", "On se voit lundi."),
+        ("Non, pardon. Je reprends depuis le début.", "Je reprends depuis le début."),
+        ("Il faut relancer Paul, enfin non pardon. C'est Marie qu'il faut relancer.",
+         "C'est Marie qu'il faut relancer."),
+    ]
+
+    NEVER = [
+        # un marqueur seul ne suffit pas : c'est une réponse, pas une amorce
+        "Je crois que non. On verra demain.",
+        "Il m'a dit non, non et non",
+        "C'est bien, enfin je crois",
+        # marqueurs enchaînés mais la phrase continue : pas un faux départ
+        "Non, pardon, je n'ai pas compris ta question",
+        "Bon, enfin bref, on verra ça demain",
+    ]
+
+    def test_dropped(self):
+        for raw, want in self.CASES:
+            self.assertEqual(cleanup_rules(raw), want, msg=raw)
+
+    def test_never(self):
+        for raw in self.NEVER:
+            self.assertEqual(cleanup_rules(raw), raw, msg=raw)
+
+
 class Stutters(unittest.TestCase):
     CASES = [
         ("je-je-je voulais dire", "Je voulais dire"),
@@ -146,6 +178,9 @@ class LlmGuard(unittest.TestCase):
          "Je voulais te dire que le projet avance."),
         ("nous nous sommes vus hier", "Nous nous sommes vus hier."),
         ("noto est pret", "Noto est prêt."),          # accents et casse : variante proche
+        # amorce abandonnée : la suppression se termine par un marqueur
+        ("alors je voulais dire que non pardon est-ce que ça marche",
+         "Est-ce que ça marche ?"),
     ]
     REJECT = [
         # suppression de mots de contenu
@@ -155,6 +190,8 @@ class LlmGuard(unittest.TestCase):
         # réécriture pure et simple
         ("je pense que tu as tort", "Je pense que tu as raison."),
         ("on se voit demain", "On se voit demain à la première heure."),
+        # supprimer des mots pleins reste interdit hors amorce abandonnée
+        ("je pense que le budget est validé", "Je pense que le budget."),
         ("", "Bonjour !"),
     ]
 

@@ -106,6 +106,7 @@ _REPAIR_PHRASES = [
 _REPAIR_WORDS = {"enfin", "pardon", "non", "plutot", "disons", "bref", "sorry", "rather"}
 
 _MAX_RUN = 8        # longueur maxi d'une prise comparée
+_MAX_ABANDONED = 12 # longueur maxi d'une amorce abandonnée jetée d'un bloc
 _MAX_GAP = 14       # au-delà, deux occurrences d'un mot ne sont plus une reprise
 
 _key_cache = {}
@@ -186,6 +187,41 @@ def _fix_stutters(chunks):
             continue
         out.append([word, trail])
     return out
+
+
+def _ends_sentence(trail: str) -> bool:
+    return any(c in trail for c in ".!?…")
+
+
+def _drop_abandoned(chunks):
+    """« Alors je voulais dire que non, pardon. Est-ce que… » → l'amorce saute.
+
+    Ici rien ne se ressemble entre les deux phrases : le locuteur n'a pas repris
+    son idée, il en a changé. Le seul indice est le marqueur d'auto-correction
+    qui termine la phrase abandonnée. On exige deux marqueurs enchaînés — un
+    seul, « je crois que non. », est une réponse et pas une amorce — la fin de
+    phrase juste derrière, et une phrase qui suit.
+    """
+    keys = [_key(c[0]) for c in chunks]
+    n = len(keys)
+    dropped = [False] * n
+    i = 0
+    while i < n:
+        if keys[i] not in _REPAIR_WORDS:
+            i += 1
+            continue
+        j = i
+        while j < n and keys[j] in _REPAIR_WORDS:
+            j += 1
+        if j - i >= 2 and j < n and _ends_sentence(chunks[j - 1][1]):
+            start = i
+            while start > 0 and not _ends_sentence(chunks[start - 1][1]):
+                start -= 1
+            if j - start <= _MAX_ABANDONED:
+                for k in range(start, j):
+                    dropped[k] = True
+        i = j
+    return [c for k, c in enumerate(chunks) if not dropped[k]]
 
 
 def _repairs_at(keys, j, aggressive):
@@ -299,6 +335,12 @@ def _pipeline(text: str, aggressive: bool):
     if not chunks:
         return "", (0, 0)
     chunks = _fix_stutters(chunks)
+    if aggressive:
+        # Hors du budget des reprises floues : cette règle a ses propres verrous
+        # (deux marqueurs, fin de phrase, 12 mots au plus).
+        chunks = _drop_abandoned(chunks)
+        if not chunks:
+            return "", (0, 0)
     chunks, fuzzy = _dedupe(chunks, aggressive)
     return _polish("".join(w + t for w, t in chunks)), (fuzzy, total)
 
@@ -357,6 +399,11 @@ def _guard_ok(output: str, source: str, allowed: set) -> bool:
             if not all(w in allowed for w in out[j1:j2]):
                 return False
         elif tag == "delete":
+            run = src[i1:i2]
+            # Amorce abandonnée : la coupe se termine sur un marqueur
+            # (« ... que non, pardon »). Le LLM a le droit de la jeter en bloc.
+            if run[-1] in _REPAIR_WORDS and len(run) <= _MAX_ABANDONED:
+                continue
             prev = src[i1 - 1] if i1 else ""
             nxt = src[i2] if i2 < len(src) else ""
             if not all(_removable(w, prev, nxt) for w in src[i1:i2]):
