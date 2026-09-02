@@ -138,6 +138,28 @@ class _LiveRun:
         self.abort = False
         self.thread = None
 
+ESC_KEYCODE = 53
+
+
+def esc_target(recording, finishing, busy, panel_open):
+    """Ce que la touche Esc doit faire, ou None si elle doit passer à l'app active.
+
+    « dictation » prime sur « panel » : si une dictée tourne, c'est elle qu'on
+    annule. Hors de ces deux cas Esc n'est jamais avalé — sinon on casserait
+    l'échappement de tout le système pour l'utilisateur.
+    """
+    if recording or finishing or busy:
+        return "dictation"
+    if panel_open:
+        return "panel"
+    return None
+
+
+def job_aborted(gen, abort_gen):
+    """Vrai si la dictée numéro `gen` a été annulée (elle ou une plus récente)."""
+    return gen <= abort_gen
+
+
 class LocalFlowApp(rumps.App):
     def __init__(self):
         super().__init__(ICON_LOADING, quit_button=None)
@@ -161,6 +183,11 @@ class LocalFlowApp(rumps.App):
         self._suppress_next_release = False
         self._busy = False
         self._busy_since = 0.0
+        # Chaque dictée porte un numéro. Esc note celui qu'il annule, et le
+        # worker compare : un job annulé ne colle rien, et un job périmé ne
+        # vient pas ranger l'UI d'une dictée plus récente.
+        self._gen = 0
+        self._abort_gen = -1
         self._start_sound_timer = None
         self._live = None
         self._ctx_app = ("", "")
@@ -502,13 +529,23 @@ class LocalFlowApp(rumps.App):
         self.tutorial.event("handsfree")
 
     def _on_key(self, keycode):
-        """Panneau ouvert : 1-4 copie une bulle, Esc ferme. Sinon on ne touche à rien.
+        """Esc annule la dictée en cours ; panneau ouvert : 1-4 copie une bulle, Esc ferme.
         Appelé depuis le thread du tap : décision immédiate, action sur le thread principal."""
+        if keycode == ESC_KEYCODE:
+            target = esc_target(self.recorder.recording, self._finishing, self._busy,
+                                self.overlay.state == "expanded")
+            if target == "dictation":
+                # Posé ici, pas dans _cancel_dictation : le worker peut coller
+                # d'un instant à l'autre et il lit ce numéro, pas l'UI.
+                self._abort_gen = self._gen
+                _on_main(self._cancel_dictation)
+                return True     # avalé : l'app active ne voit pas l'Esc
+            if target == "panel":
+                _on_main(self.overlay.hide)
+                return True
+            return False
         if self.overlay.state != "expanded":
             return False
-        if keycode == 53:  # Esc
-            _on_main(self.overlay.hide)
-            return True
         idx = {18: 0, 19: 1, 20: 2, 21: 3}.get(keycode)  # touches 1-4 (position physique)
         if idx is not None:
             def act():
@@ -644,6 +681,7 @@ class LocalFlowApp(rumps.App):
     # ---------- enregistrement ----------
 
     def _start_recording(self):
+        self._gen += 1
         self._ctx_app = frontmost_app()
         live = self.config.live_enabled and self.transcriber is not None
         try:
@@ -737,6 +775,27 @@ class LocalFlowApp(rumps.App):
             self._start_sound_timer.cancel()
             self._start_sound_timer = None
 
+    def _cancel_dictation(self):
+        """Esc : la dictée en cours est jetée — audio, transcription, collage.
+
+        Ne touche pas à une réunion en cours : c'est long et délibéré, un Esc
+        de réflexe coûterait l'enregistrement entier. Le bouton « Arrêter » du
+        panneau reste le seul chemin.
+        """
+        self._abort_gen = self._gen
+        self.hands_free = False
+        self._finishing = False
+        # `_busy` est libéré tout de suite pour que fn reparte sans attendre la
+        # fin du décodage ; le job en vol se reconnaîtra périmé à son numéro.
+        self._busy = False
+        if self.recorder.recording:
+            self._cancel_recording()
+        else:
+            self.overlay.hide()
+            self.title = self._idle_icon()
+        self._play(SOUND_STOP)
+        _log("annulé (Esc)")
+
     def _cancel_recording(self):
         self._cancel_start_sound_timer()
         if self._live is not None:
@@ -759,6 +818,9 @@ class LocalFlowApp(rumps.App):
 
     def _finish_now(self):
         self._finishing = False
+        if job_aborted(self._gen, self._abort_gen):
+            # Esc est tombé pendant les TAIL_S : le minuteur arrive après la bataille.
+            return
         audio = self.recorder.stop()
         if audio is None or len(audio) < MIN_AUDIO_S * SAMPLE_RATE:
             _log(f"audio trop court ou vide ({0 if audio is None else len(audio)/SAMPLE_RATE:.2f}s), ignoré")
@@ -779,7 +841,8 @@ class LocalFlowApp(rumps.App):
         self.overlay.begin_progress(self._decode_estimate(len(audio) / SAMPLE_RATE))
         self._busy = True
         self._busy_since = time.time()
-        self._jobs.put(("audio", {"audio": audio, "live": self._live, "app": self._ctx_app, "voiced": voiced}))
+        self._jobs.put(("audio", {"audio": audio, "live": self._live, "app": self._ctx_app,
+                                  "voiced": voiced, "gen": self._gen}))
         self._live = None
 
     # ---------- pipeline ----------
@@ -804,8 +867,14 @@ class LocalFlowApp(rumps.App):
     def _process(self, job):
         audio, live, (bundle, app_name) = job["audio"], job["live"], job["app"]
         voiced = job.get("voiced", len(audio) / SAMPLE_RATE)
+        gen = job.get("gen", 0)
         self._save_debug(audio)
         try:
+            if job_aborted(gen, self._abort_gen):
+                if live is not None:
+                    live.abort = True
+                _log("annulé (Esc) : dictée jetée avant transcription")
+                return
             t0 = time.time()
             text = ""
             if live is not None and live.done.wait(LIVE_JOIN_S) and live.text and self.config.live_paste_fast:
@@ -823,6 +892,11 @@ class LocalFlowApp(rumps.App):
                     # du verrou fausserait l'estimation des prochaines dictées.
                     self._record_decode_time(len(audio) / SAMPLE_RATE, time.time() - t_dec)
                 source = self.transcriber.name
+            # Dernier contrôle avant tout effet de bord : Esc a pu tomber
+            # pendant le décodage, qui n'est pas interruptible en cours de route.
+            if job_aborted(gen, self._abort_gen):
+                _log("annulé (Esc) : transcription jetée, rien n'est collé")
+                return
             _on_main(self.overlay.end_progress)
 
             seconds = len(audio) / SAMPLE_RATE
@@ -873,18 +947,23 @@ class LocalFlowApp(rumps.App):
             _log("erreur pipeline:\n" + traceback.format_exc())
             _notify("Erreur", str(exc))
         finally:
-            self._busy = False
             try:
                 import mlx.core as mx
                 mx.clear_cache()   # rend les tampons intermédiaires : moins de pages à swapper
             except Exception:
                 pass
 
-            def done():
-                self.overlay.hide()
-                self.title = self._idle_icon()
+            # Un job périmé (Esc, puis nouvelle dictée lancée aussitôt) ne doit
+            # ni relâcher `_busy` ni ranger l'overlay : ils appartiennent à la
+            # dictée en cours, pas à celle qu'on vient d'abandonner.
+            if gen == self._gen:
+                self._busy = False
 
-            _on_main(done)
+                def done():
+                    self.overlay.hide()
+                    self.title = self._idle_icon()
+
+                _on_main(done)
 
     # ---------- menu ----------
 
