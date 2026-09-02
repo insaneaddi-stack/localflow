@@ -9,6 +9,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from localflow import theme
 
 
+def _hex_rgb(h):
+    return (int(h[0:2], 16) / 255.0, int(h[2:4], 16) / 255.0, int(h[4:6], 16) / 255.0)
+
+
 def _lum(rgb):
     def lin(c):
         return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
@@ -67,24 +71,39 @@ class Palette(unittest.TestCase):
                                   ("O_PETIT", theme.O_PETIT, 5.0)]:
             self.assertGreaterEqual(contraste(encre, theme.FOND), mini, msg=name)
 
-    def test_encre_3_ne_porte_pas_de_petit_texte(self):
-        """ENCRE_3 est annoncée à 4,5:1 mais vaut 3,60 sur le fond crème.
+    def test_encre_3_passe_AA(self):
+        """La production a corrigé ce que le kit annonçait à tort.
 
-        C'est SOUS le seuil AA (4,5:1) alors que son emploi déclaré est
-        « discret, légendes » — donc du petit texte. Dans LocalFlow les légendes
-        prennent ENCRE_2 ; ENCRE_3 reste pour le décoratif et les traits.
-        Ce test verrouille le constat : s'il casse, c'est que la valeur a bougé.
+        Le kit donne ENCRE_3 = #8A837D à 4,5:1 ; mesurée, elle tombe à 3,60 sur
+        le fond crème — sous le seuil AA, alors que son emploi déclaré est
+        « discret, légendes », donc du petit texte. Le CSS de production est
+        passé à #6E6862 en le disant : « 5,0:1 sur #F4F4F4 — #8A837D tombait à
+        3,40 ». Ce test empêche de revenir à la valeur du kit.
         """
-        self.assertLess(contraste(theme.ENCRE_3, theme.FOND), 4.5)
-        self.assertGreaterEqual(contraste(theme.ENCRE_2, theme.FOND), 4.5)
+        self.assertGreaterEqual(contraste(theme.ENCRE_3, theme.FOND), 4.5)
+        self.assertLess(contraste(_hex_rgb("8A837D"), theme.FOND), 4.5)
 
-    def test_contraste_texte_sur_hud(self):
-        """Sur fond sombre l'échelle s'inverse : c'est l'orange CLAIR qui porte."""
-        self.assertGreaterEqual(contraste(theme.HUD_ENCRE, theme.HUD_FOND), 15.0)
-        self.assertGreaterEqual(contraste(theme.HUD_ENCRE_2, theme.HUD_FOND), 7.0)
-        self.assertGreaterEqual(contraste(theme.HUD_ORANGE, theme.HUD_FOND), 4.5)
-        # et l'orange sombre, lui, ne passe PAS sur du sombre — d'où la règle
-        self.assertLess(contraste(theme.O_PETIT, theme.HUD_FOND), 4.5)
+    def test_italique_passe_le_seuil_gros_texte(self):
+        """Même histoire pour le grand italique.
+
+        La production mesure sur #F4F4F4, le fond de la section concernée, et
+        non sur le crème : « 3,17:1 — #F66000 tombait à 2,90 ». Recalculé ici
+        sur ce même fond, sinon la comparaison ne veut rien dire.
+        """
+        gris = _hex_rgb("F4F4F4")
+        self.assertGreaterEqual(contraste(theme.O_ITALIQUE, gris), 3.0)
+        self.assertLess(contraste(_hex_rgb("F66000"), gris), 3.0)
+
+    def test_pas_de_pilule(self):
+        """« Rayon 8px, pas de pilule » — la règle est écrite deux fois en production."""
+        self.assertLessEqual(theme.RAYON_CARTE, 10.0)
+        self.assertLessEqual(theme.RAYON_FLOTTANT, 8.0)
+
+    def test_ombre_chaude_pas_orange_pur(self):
+        """L'ombre de production est un brun chaud : un orange pur ne creuse pas."""
+        r, g, b = theme.OMBRE["couleur"]
+        self.assertTrue(r > g > b, "l'ombre doit rester chaude")
+        self.assertLess(r, 0.75, "un orange vif à cette place rayonne au lieu de creuser")
 
 
 class Mouvement(unittest.TestCase):

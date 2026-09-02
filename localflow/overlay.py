@@ -84,17 +84,25 @@ BAR_COUNT, BAR_W, BAR_GAP = 5, 3.0, 4.0
 SEGMENTS = 140
 
 def _orange(a):
+    """L'orange de décor. Jamais du texte : il ne fait que 3,0:1 sur le crème."""
     return theme.ns(ORANGE, a)
+
+def _orange_t(a):
+    """L'orange qui a le droit de porter du petit texte — 5,2:1."""
+    return theme.ns(theme.O_PETIT, a)
 
 def _fil(a):
     return theme.ns(FIL, a)
 
 def _encre(a):
-    """L'encre du HUD : le fond crème du système, inversé en clarté."""
-    return theme.ns(theme.HUD_ENCRE, a)
+    """L'encre du système. Chaude, tirée vers le brun, jamais noire."""
+    return theme.ns(theme.ENCRE, a)
+
+def _encre2(a):
+    return theme.ns(theme.ENCRE_2, a)
 
 def _trait(a):
-    return theme.ns(theme.HUD_TRAIT, a)
+    return theme.ns(theme.TRAIT, a)
 
 def _reduce_motion():
     """Réglage macOS « Réduire les animations » (Accessibilité → Affichage).
@@ -230,12 +238,35 @@ class _BandView(NSView):
     # ---- dessin ----
 
     def drawRect_(self, dirty):
+        """Un plantage ici tue l'app entière.
+
+        AppKit transforme une exception Python remontée d'un dessin en
+        NSException, et `+[NSApplication _crashOnException:]` termine le
+        processus — un .ips, la barre de menus qui disparaît, la dictée en cours
+        perdue. À 60 images par seconde, sur des tailles interpolées qui peuvent
+        rendre un rectangle négatif le temps d'une image, ça n'est pas un risque
+        théorique : c'est arrivé le 2 septembre. On préfère une image manquante
+        et une ligne dans le log.
+        """
+        try:
+            self._draw(dirty)
+        except Exception:
+            import traceback
+            now = time.time()
+            if now - getattr(_BandView, "_last_draw_err", 0.0) > 10.0:
+                _BandView._last_draw_err = now
+                print("[overlay] erreur de dessin (image sautée) :\n"
+                      + traceback.format_exc(), flush=True)
+
+    @objc.python_method
+    def _draw(self, dirty):
         ov = self.overlay
         if ov is None:
             return
         b = self.bounds()
         cw, ch = ov.cur_w, ov.cur_h
-        radius = theme.RAYON_CARTE_MAX if ch > 60.0 else min(ch / 2.0, 22.0)
+        # « Rayon 8px, pas de pilule » : la règle vaut pour tout ce qui flotte.
+        radius = theme.RAYON_CARTE if ch > 60.0 else theme.RAYON_FLOTTANT
         if self.in_glass:
             # On EST la contentView du verre : nos bounds sont déjà la pilule, et c'est
             # le verre qui fournit fond, arête et ombre. On ne dessine que le contenu.
@@ -246,10 +277,9 @@ class _BandView(NSView):
         body = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(content, radius, radius)
 
         if not self.in_glass:
-            # L'élévation : une seule ombre, chaude, et le filet. Les trois
-            # couches noires empilées d'avant étaient une profondeur peinte.
-            # C'est OMBRE_HUD et non l'ombre orange du brand book : sur fond
-            # sombre l'orange ne creuse pas, il rayonne — donc il lueurit.
+            # L'élévation de production : une ombre brune chaude, un anneau
+            # d'un pixel, un filet. Les trois couches noires empilées d'avant
+            # étaient une profondeur peinte, ce que le système refuse.
             from AppKit import NSGraphicsContext, NSShadow
             # `currentContext()` est nul quand drawRect_ est appelé à la main,
             # hors cycle d'affichage — c'est ce que fait l'auto-test. L'ombre
@@ -258,15 +288,18 @@ class _BandView(NSView):
             if ctx is not None:
                 ctx.saveGraphicsState()
                 sh = NSShadow.alloc().init()
-                sh.setShadowOffset_((0.0, theme.OMBRE_HUD["dy"]))
-                sh.setShadowBlurRadius_(theme.OMBRE_HUD["flou"])
-                sh.setShadowColor_(theme.ns(theme.OMBRE_HUD["couleur"], theme.OMBRE_HUD["alpha"]))
+                sh.setShadowOffset_((0.0, theme.OMBRE["dy"]))
+                sh.setShadowBlurRadius_(theme.OMBRE["flou"])
+                sh.setShadowColor_(theme.ns(theme.OMBRE["couleur"], theme.OMBRE["alpha"]))
                 sh.set()
-            theme.ns(theme.HUD_FOND, 1.0).setFill()
+            theme.ns(theme.FOND, 1.0).setFill()
             body.fill()
             if ctx is not None:
                 ctx.restoreGraphicsState()
-            # « Le filet remplace l'ombre » : 1 px, et c'est tout.
+            # Le filet, puis l'anneau d'un pixel qui double l'ombre en production.
+            theme.ns(theme.OMBRE_ANNEAU["couleur"], theme.OMBRE_ANNEAU["alpha"]).setStroke()
+            body.setLineWidth_(theme.FILET * 2)
+            body.stroke()
             _trait(1.0).setStroke()
             body.setLineWidth_(theme.FILET)
             body.stroke()
@@ -327,33 +360,75 @@ class _BandView(NSView):
 
     @objc.python_method
     def _draw_idle(self, pill, hover, k=1.0):
+        """Au repos et au survol, c'est le monogramme qui tient la carte.
+
+        Il y avait ici un point violet qui respirait. « Le A seul » est la forme
+        que la marque réserve à l'onglet, à l'avatar et à l'icône : une pastille
+        de 18 px posée au bord de l'écran est exactement ce cas-là.
+        """
         ov = self.overlay
         cx = pill.origin.x + pill.size.width / 2.0
         cy = pill.origin.y + pill.size.height / 2.0
-        pulse = 0.5 + 0.5 * math.sin(ov.phase * 1.6)
+        mono = theme.image(theme.MONOGRAMME)
+
         if hover:
-            # Le survol se contentait de passer l'opacité de 0,35 à 0,55 et le point de
-            # 3 à 4 px : indiscernable du repos, et donc aucun indice que c'est cliquable.
-            # On dit maintenant explicitement quoi faire.
-            dot = 5.0
-            _orange((0.85 + 0.15 * pulse) * k).setFill()
-            hint = "maintenir fn  ·  double-tap"
-            ha = _attrs(11.0, 0.80 * k, weight=0.4, truncate=False)
+            hint = "Maintenir fn  ·  double-tap"
+            ha = _attrs(11.5, 0.95 * k, weight=500, truncate=False,
+                        color=_encre2(0.95 * k))
             hw = _text_width(hint, ha)
-            gap = 9.0
-            x = cx - (dot + gap + hw) / 2.0
-            NSBezierPath.bezierPathWithOvalInRect_(
-                NSMakeRect(x, cy - dot / 2, dot, dot)).fill()
-            _draw_text(hint, NSMakeRect(x + dot + gap, cy - 8.0, hw + 2, 16), ha)
+            d, gap = 15.0, 10.0
+            x = cx - (d + gap + hw) / 2.0
+            self._draw_mono(mono, x, cy - d / 2, d, k)
+            _draw_text(hint, NSMakeRect(x + d + gap, cy - 8.0, hw + 2, 16), ha)
             return
-        # au repos : point violet qui « respire » doucement, l'app est prête
-        a = (0.35 + 0.25 * pulse) * k
-        d = 3.0
-        _orange(a).setFill()
-        NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(cx - d / 2, cy - d / 2, d, d)).fill()
-        _encre(0.10 * k).setFill()
+
+        # Au repos la carte fait 8 px de haut : le monogramme n'y tiendrait pas.
+        # Un point suffit, et il reste le seul élément coloré de l'écran.
+        d = 3.5
+        _orange(0.95 * k).setFill()
+        NSBezierPath.bezierPathWithOvalInRect_(
+            NSMakeRect(cx - d / 2, cy - d / 2, d, d)).fill()
+        _trait(0.9 * k).setFill()
         lw = pill.size.width * 0.42
-        NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(cx - lw / 2, cy - 0.75, lw, 1.5), 0.75, 0.75).fill()
+        NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+            NSMakeRect(cx - lw / 2, cy - 0.5, lw, 1.0), 0.5, 0.5).fill()
+
+    @objc.python_method
+    def _draw_lockup(self, x, y, cap, k):
+        """Le logotype AUR'IA suivi de FLOW. Renvoie la largeur occupée.
+
+        Si le wordmark manque, on écrit le nom en Figtree avec l'apostrophe en
+        orange — le brand book l'exige : « elle est orange, ou réservée en
+        blanc. Jamais noire, jamais d'une autre teinte. »
+        """
+        wm = theme.image(theme.WORDMARK)
+        fa = _attrs(cap, 0.95 * k, weight=700, truncate=False)
+        if wm is not None:
+            sz = wm.size()
+            w = cap * (sz.width / sz.height) if sz.height else cap * 3.8
+            wm.drawInRect_fromRect_operation_fraction_(
+                NSMakeRect(x, y - cap * 0.06, w, cap), NSMakeRect(0, 0, 0, 0), 2, 0.95 * k)
+            fw = _text_width("FLOW", fa)
+            _draw_text("FLOW", NSMakeRect(x + w + 3, y - cap * 0.06, fw + 2, cap * 1.4), fa)
+            return w + 3 + fw
+        oa = _attrs(cap, 0.95 * k, weight=700, truncate=False, color=_orange_t(0.95 * k))
+        w1 = _text_width(theme.NOM_AVANT, fa)
+        w2 = _text_width(theme.NOM_APOSTROPHE, oa)
+        _draw_text(theme.NOM_AVANT, NSMakeRect(x, y, w1 + 2, cap * 1.4), fa)
+        _draw_text(theme.NOM_APOSTROPHE, NSMakeRect(x + w1, y, w2 + 2, cap * 1.4), oa)
+        w3 = _text_width(theme.NOM_APRES, fa)
+        _draw_text(theme.NOM_APRES, NSMakeRect(x + w1 + w2, y, w3 + 2, cap * 1.4), fa)
+        return w1 + w2 + w3
+
+    @objc.python_method
+    def _draw_mono(self, mono, x, y, d, k):
+        """Le monogramme, ou un disque orange s'il manque."""
+        if mono is not None:
+            mono.drawInRect_fromRect_operation_fraction_(
+                NSMakeRect(x, y, d, d), NSMakeRect(0, 0, 0, 0), 2, k)
+            return
+        _orange(0.95 * k).setFill()
+        NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(x, y, d, d)).fill()
 
     @objc.python_method
     def _draw_meeting(self, pill, k):
@@ -565,23 +640,32 @@ class _BandView(NSView):
 
     @objc.python_method
     def _chip(self, x, y, label, on=None, action=None, payload=None, alpha=1.0, min_w=0.0):
-        """Petite pilule cliquable. on=None : neutre ; True/False : interrupteur."""
-        attrs = _attrs(11.5, 0.92 * alpha, weight=0.3)
-        w = max(min_w, _text_width(label, attrs) + 22.0)
-        h = 24.0
+        """Bouton du système. on=True : l'unique action colorée, aplat #C94E00.
+
+        Rayon 10 px, pas de pilule. Le neutre est une carte à filet, jamais un
+        deuxième aplat coloré — « une seule action colorée par écran ».
+        """
+        actif = on is True
+        attrs = _attrs(11.5, 0.95 * alpha, weight=600,
+                       color=(theme.ns(theme.BLANC, 0.98 * alpha) if actif
+                              else _encre2(0.95 * alpha)))
+        w = max(min_w, _text_width(label, attrs) + 26.0)
+        h = 26.0
         rect = NSMakeRect(x, y, w, h)
         hovered = self.hover_pt is not None and NSPointInRect(self.hover_pt, rect)
-        if on is True:
-            _orange((0.28 if not hovered else 0.38) * alpha).setFill()
+        path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+            rect, theme.RAYON_BOUTON, theme.RAYON_BOUTON)
+        if actif:
+            # #C94E00 porte du blanc à 4,6:1 ; au survol on va vers #BE4400.
+            theme.ns(theme.O_PETIT if hovered else theme.O_BOUTON, alpha).setFill()
+            path.fill()
         else:
-            _encre((0.07 if not hovered else 0.13) * alpha).setFill()
-        path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(rect, h / 2, h / 2)
-        path.fill()
-        if on is True:
-            _orange(0.9 * alpha).setStroke()
-            path.setLineWidth_(1.0)
+            theme.ns(theme.CARTE if hovered else theme.FOND_PUR, alpha).setFill()
+            path.fill()
+            _trait(alpha).setStroke()
+            path.setLineWidth_(theme.FILET)
             path.stroke()
-        _draw_text(label, NSMakeRect(x + 11, y + 4.5, w - 22, h - 8), attrs)
+        _draw_text(label, NSMakeRect(x + 13, y + 5.5, w - 26, h - 10), attrs)
         if action:
             if not getattr(self, "_ghost", False):   # l'état sortant ne doit pas rester cliquable
                 self.hit_zones.append((rect, action, payload))
@@ -589,7 +673,7 @@ class _BandView(NSView):
 
     @objc.python_method
     def _symbol(self, name, size, alpha):
-        """Icône SF Symbol blanche (cache par nom/taille)."""
+        """Icône SF Symbol à l'encre du système (cache par nom/taille)."""
         cache = getattr(self, "_sym_cache", None)
         if cache is None:
             cache = self._sym_cache = {}
@@ -600,7 +684,8 @@ class _BandView(NSView):
                 cfg = NSImageSymbolConfiguration.configurationWithPointSize_weight_(size, 0.3)
                 try:
                     cfg = cfg.configurationByApplyingConfiguration_(
-                        NSImageSymbolConfiguration.configurationWithHierarchicalColor_(NSColor.whiteColor()))
+                        NSImageSymbolConfiguration.configurationWithHierarchicalColor_(
+                            theme.ns(theme.ENCRE)))
                 except Exception:
                     pass
                 img = img.imageWithSymbolConfiguration_(cfg)
@@ -814,13 +899,14 @@ class _BandView(NSView):
         inner_w = pw - 2 * M
         top = py + ph
 
-        # « LocalFlow » suivi de l'état du moteur : `status` était calculé à chaque
-        # rafraîchissement et n'était affiché nulle part.
-        ta = _attrs(15, 0.95 * k, weight=0.5)
-        _draw_text("LocalFlow", NSMakeRect(x0, top - M - 18, 200, 20), ta)
+        # Le verrou de marque : le logotype AUR'IA, puis FLOW à la même hauteur de
+        # capitale. « Le mot » est la forme par défaut d'un en-tête ; le produit
+        # dérivé s'accroche derrière plutôt que de refaire un dessin.
+        ta = _attrs(15, 0.95 * k, weight=700)
+        lw = self._draw_lockup(x0, top - M - 16, 15.0, k)
         status = data.get("status", "")
         if status:
-            sx = x0 + _text_width("LocalFlow", ta) + 10
+            sx = x0 + lw + 12
             _draw_text(status, NSMakeRect(sx, top - M - 17, inner_w - (sx - x0) - 60, 18),
                        _attrs(11.5, 0.42 * k))
         _draw_text(data.get("stats_line", ""), NSMakeRect(x0, top - M - 36, inner_w - 80, 14), _attrs(11, 0.55 * k))

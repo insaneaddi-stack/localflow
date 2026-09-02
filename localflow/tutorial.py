@@ -40,8 +40,8 @@ FPS = 60.0
 
 STEPS = [
     {   # 0 — bienvenue
-        "title": "Bienvenue dans LocalFlow",
-        "lines": ["Cette petite barre, en bas, c'est LocalFlow. Elle reste là,",
+        "title": "Bienvenue dans AUR'IAFLOW",
+        "lines": ["Cette petite barre, en bas, c'est AUR'IAFLOW. Elle reste là,",
                   "discrète, tant que tu ne parles pas."],
         "hint": "", "wait": "key", "arrow": True,
     },
@@ -65,7 +65,7 @@ STEPS = [
     },
     {   # 4 — réunions
         "title": "Réunions",
-        "lines": ["Quand un appel démarre (Zoom, Meet, Teams…), LocalFlow propose de l'enregistrer :",
+        "lines": ["Quand un appel démarre (Zoom, Meet, Teams…), AUR'IAFLOW propose de l'enregistrer :",
                   "micro + son de l'appel, transcript en direct, compte rendu en Markdown. Tout reste sur ton Mac."],
         "hint": "Aussi dans le panneau (bulle Réunion) et le menu 🎙", "wait": "key", "arrow": True,
     },

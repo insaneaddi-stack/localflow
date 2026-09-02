@@ -1,6 +1,23 @@
 """DA AUR'IA appliquée à LocalFlow — source de vérité unique.
 
-Transposé de « AUR'IA — Kit de marque 2026 » (brandbook/kit/index.html).
+Source : **le site en production** (`AURIA MVP/landing/styles.css`), pas le kit.
+L'archive DA du dépôt AUR'IA le dit noir sur blanc : « c'est le site en
+production qui fait foi, pas les documents ». Le kit (27 août) est en retard sur
+trois points, et le `:root` en tête de styles.css est un vestige mort (Anton,
+#FF4A00, Inter) : la page ne charge que Newsreader et Figtree.
+
+Les trois écarts, tous vérifiés dans le CSS vivant :
+
+- ENCRE_3 : #8A837D → #6E6862. Le commentaire de production dit « 5,0:1 sur
+  #F4F4F4 — #8A837D tombait à 3,40 ». C'est exactement le défaut que la mesure
+  avait sorti ici ; il est déjà corrigé chez toi.
+- O_ITALIQUE : #F66000 → #EE5800, « 3,17:1 — #F66000 tombait à 2,90 ».
+- L'ombre teintée n'est pas l'orange du kit mais un brun chaud
+  rgba(160, 80, 20, …) doublé d'un anneau d'un pixel. Un orange pur ne creuse
+  pas, il rayonne.
+
+Et une règle de forme que le kit ne dit pas, écrite deux fois dans le CSS :
+**« Rayon 8px, pas de pilule. »**
 
 Deux surfaces, un seul système :
 
@@ -25,9 +42,15 @@ import os
 
 # ---------------------------------------------------------------- polices ----
 
-FONTS_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets", "fonts"
-)
+_ASSETS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "assets")
+FONTS_DIR = os.path.join(_ASSETS, "fonts")
+BRAND_DIR = os.path.join(_ASSETS, "brand")
+
+# Le nom du produit. Le brand book réserve « AURIA » sans apostrophe aux prompts
+# et à l'oral (la synthèse vocale l'épelle) ; à l'écrit c'est AUR'IA, et
+# l'apostrophe est orange ou réservée en blanc, jamais d'une autre teinte.
+NOM = "AUR'IAFLOW"
+NOM_AVANT, NOM_APOSTROPHE, NOM_APRES = "AUR", "'", "IAFLOW"
 
 # Instances nommées telles que CoreText les expose une fois les variables
 # enregistrées (vérifié : NSFontManager.availableMembersOfFontFamily_).
@@ -75,7 +98,21 @@ def register_fonts():
 
 
 def font(size, weight=400, serif=False, italic=False):
-    """NSFont du système AUR'IA, avec repli sur les polices du Mac si absentes."""
+    """NSFont du système AUR'IA, avec repli sur les polices du Mac si absentes.
+
+    Ne lève jamais : elle est appelée depuis drawRect_, à 60 images par seconde,
+    et une exception qui remonte d'un dessin fait planter l'app entière (AppKit
+    la transforme en NSException, `_crashOnException:` fait le reste).
+    """
+    try:
+        return _font(size, weight, serif, italic)
+    except Exception:
+        from AppKit import NSFont
+
+        return NSFont.systemFontOfSize_(size)
+
+
+def _font(size, weight, serif, italic):
     from AppKit import NSFont, NSFontWeightRegular, NSFontWeightSemibold
 
     register_fonts()
@@ -115,11 +152,11 @@ TRAIT_FORT = _hex("E0D0BF")
 # Les encres — « le noir n'est jamais pur : il est chaud, tiré vers le brun »
 ENCRE = _hex("1A1614")       # titres, 17:1
 ENCRE_2 = _hex("5F5B57")     # texte courant, 7:1
-ENCRE_3 = _hex("8A837D")     # discret, légendes, 4,5:1
+ENCRE_3 = _hex("6E6862")     # discret, légendes — 5,0:1 (production)
 
 # Les cinq oranges — un emploi chacun, et pas un de plus
 O_VITRINE = _hex("FF6A00")   # décor, icônes, illustrations. Jamais du texte.
-O_ITALIQUE = _hex("F66000")  # le grand italique des titres
+O_ITALIQUE = _hex("EE5800")  # le grand italique des titres — 3,17:1 (production)
 O_GROS = _hex("D24E00")      # texte orange à partir de 24 px
 O_BOUTON = _hex("C94E00")    # fond de bouton, blanc dessus
 O_PETIT = _hex("BE4400")     # petit texte, liens, anneau de focus
@@ -132,10 +169,30 @@ HUD_SURVOL = _hex("2D2521")
 HUD_TRAIT = _hex("332B26")   # le filet, côté sombre
 HUD_ENCRE = _hex("FEFAF6")   # le fond crème devient l'encre
 HUD_ENCRE_2 = _hex("C8BDB4")
-HUD_ENCRE_3 = _hex("8A837D")  # le neutre médian ne bouge pas
+HUD_ENCRE_3 = _hex("8A837D")  # côté sombre, le neutre médian d'origine tient (4,81:1)
 HUD_ORANGE = O_VITRINE       # sur sombre, c'est le plus clair qui porte
 
 BLANC = (1.0, 1.0, 1.0)
+
+
+_images = {}
+
+
+def image(name):
+    """Un visuel de marque depuis assets/brand/ (monogramme, wordmark). None si absent."""
+    if name not in _images:
+        try:
+            from AppKit import NSImage
+
+            _images[name] = NSImage.alloc().initWithContentsOfFile_(
+                os.path.join(BRAND_DIR, name))
+        except Exception:
+            _images[name] = None
+    return _images[name]
+
+
+MONOGRAMME = "monogram-orange.png"   # « le A seul : onglet, avatar, icône »
+WORDMARK = "wordmark-noir-detoure.png"
 
 
 def ns(rgb, alpha=1.0):
@@ -147,9 +204,12 @@ def ns(rgb, alpha=1.0):
 
 # ----------------------------------------------------------------- formes ----
 
-RAYON_CARTE = 14.0      # cartes : 14 à 16 px
-RAYON_CARTE_MAX = 16.0
-RAYON_BOUTON = 10.0     # action principale ; la pilule est réservée aux fins de section
+# « Rayon 8px, pas de pilule » — la règle est écrite deux fois dans le CSS de
+# production. Le kit parlait de cartes à 14-16 px et d'une pilule pour les fins
+# de section : la production a resserré et supprimé la pilule.
+RAYON_CARTE = 10.0      # rectangles à coins doux
+RAYON_FLOTTANT = 8.0    # ce qui flotte : pastilles, HUD
+RAYON_BOUTON = 10.0
 FILET = 1.0             # « le filet remplace l'ombre »
 FOCUS_EPAISSEUR = 2.0   # anneau : 2 px #BE4400, écart 4 px, le même partout
 FOCUS_ECART = 4.0
@@ -157,7 +217,9 @@ FIL_EPAISSEUR = 5.0     # le fil : #FB5F00, 5 px, extrémités arrondies
 
 # L'ombre unique du brand book : teintée orange, réservée à ce qui flotte
 # vraiment. Elle est spécifiée sur le fond crème, où l'orange assombrit.
-OMBRE = {"dy": -10.0, "flou": 26.0, "couleur": (232 / 255, 93 / 255, 0.0), "alpha": 0.20}
+OMBRE = {"dy": -14.0, "flou": 40.0, "couleur": (160 / 255, 80 / 255, 20 / 255), "alpha": 0.34}
+# L'anneau d'un pixel qui double l'ombre en production.
+OMBRE_ANNEAU = {"couleur": (201 / 255, 78 / 255, 0.0), "alpha": 0.09}
 
 # Sur la surface sombre, la même ombre ne peut plus assombrir : elle rayonne, et
 # se lit exactement comme la lueur que le système interdit. La règle des neutres
@@ -177,7 +239,7 @@ D_RECIT = 0.520     # étape du récit
 D_ENTREE = 0.880    # entrée à l'écran
 
 EASE_STANDARD = (0.2, 0.7, 0.3, 1.0)    # retours courts
-EASE_DOUCE = (0.32, 0.72, 0.0, 1.0)     # la courbe maison
+EASE_DOUCE = (0.32, 0.72, 0.0, 1.0)     # la courbe maison — 35 emplois en production
 EASE_ARRIVEE = (0.16, 1.0, 0.3, 1.0)    # ce qui se pose
 
 

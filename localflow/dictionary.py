@@ -11,7 +11,7 @@ import re
 
 DICT_PATH = os.path.expanduser("~/.localflow.dict.txt")
 
-DEFAULT_CONTENT = """# Dictionnaire LocalFlow — un mot ou un nom par ligne.
+DEFAULT_CONTENT = """# Dictionnaire AUR'IAFLOW — un mot ou un nom par ligne.
 # « mauvais -> bon » force un remplacement. Sans flèche, les mots proches sont corrigés.
 # Rechargé automatiquement à chaque dictée.
 LocalFlow

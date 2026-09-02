@@ -22,6 +22,7 @@ import rumps
 from AppKit import NSApp, NSImage, NSOperationQueue
 
 from .audio import SAMPLE_RATE, Recorder, audio_stuck
+from . import theme
 from .cleanup import Cleaner, cleanup_rules
 from .commands import UNDO, apply_commands
 from .config import Config
@@ -104,11 +105,11 @@ def _notify(title, message):
     try:
         subprocess.Popen(
             ["osascript", "-e",
-             f'display notification "{safe(message)}" with title "LocalFlow" subtitle "{safe(title)}"'],
+             f'display notification "{safe(message)}" with title "{safe(theme.NOM)}" subtitle "{safe(title)}"'],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
     except Exception:
-        print(f"LocalFlow — {title}: {message}")
+        print(f"{theme.NOM} — {title}: {message}")
 
 def _mem_state():
     """Swap utilisé / libre (diagnostic des lenteurs)."""
@@ -176,6 +177,13 @@ class LocalFlowApp(rumps.App):
                 NSApp.setApplicationIconImage_(icon)
         except Exception:
             pass
+
+        # Les fontes sont enregistrées MAINTENANT, pas au premier dessin :
+        # un CTFontManagerRegisterFontsForURL déclenché depuis drawRect_ fait de
+        # l'entrée/sortie disque au milieu d'une image.
+        loaded = theme.register_fonts()
+        if len(loaded) < 3:
+            _log(f"polices : {len(loaded)}/3 chargées {loaded} — repli sur les polices système")
 
         self.hands_free = False
         self._press_time = None
@@ -310,7 +318,7 @@ class LocalFlowApp(rumps.App):
         sha = update.just_updated()
         if sha:
             _log(f"mis à jour → {sha[:7]}")
-            _notify("LocalFlow mis à jour", f"Nouvelle version installée ({sha[:7]}).")
+            _notify("AUR'IAFLOW mis à jour", f"Nouvelle version installée ({sha[:7]}).")
         threading.Timer(20, self._check_update).start()
         self._update_timer = rumps.Timer(lambda _t: self._check_update(), 6 * 3600)
         self._update_timer.start()
@@ -333,7 +341,7 @@ class LocalFlowApp(rumps.App):
                     self._update_sha = None
                     self.item_update.title = "Vérifier les mises à jour"
                     if notify_if_none:
-                        _notify("LocalFlow", "Tu as la dernière version.")
+                        _notify("AUR'IAFLOW", "Tu as la dernière version.")
             _on_main(apply)
         threading.Thread(target=work, daemon=True).start()
 
@@ -346,7 +354,7 @@ class LocalFlowApp(rumps.App):
             return
         self._updating = True
         _log("mise à jour automatique lancée")
-        _notify("Mise à jour", "LocalFlow se met à jour en arrière-plan (quelques secondes)…")
+        _notify("Mise à jour", "AUR'IAFLOW se met à jour en arrière-plan (quelques secondes)…")
         update.run_silent()
 
     def _check_update_clicked(self, _item):
@@ -384,7 +392,7 @@ class LocalFlowApp(rumps.App):
                 # cours de téléchargement, disque plein…), inutile de noyer le Centre de
                 # notifications. L'état reste visible dans le menu et dans le log.
                 if not notified:
-                    _notify("Modèle indisponible", f"LocalFlow réessaie en boucle — {exc}")
+                    _notify("Modèle indisponible", f"AUR'IAFLOW réessaie en boucle — {exc}")
                     notified = True
                 _on_main(lambda d=delay: setattr(self.item_status, "title", f"⚠️ Modèle : nouvel essai dans {d}s"))
                 time.sleep(delay)
@@ -613,7 +621,7 @@ class LocalFlowApp(rumps.App):
             stuck = audio_stuck()
             if stuck > 12:
                 _log(f"audio figé depuis {stuck:.0f}s (PortAudio, retour de veille ?) → redémarrage automatique")
-                _notify("LocalFlow redémarre", "La couche audio de macOS s'est figée : redémarrage automatique (~10 s).")
+                _notify("AUR'IAFLOW redémarre", "La couche audio de macOS s'est figée : redémarrage automatique (~10 s).")
                 threading.Timer(1.2, lambda: os._exit(86)).start()
                 return
             if self._lost_fn_release():
@@ -1291,7 +1299,7 @@ class LocalFlowApp(rumps.App):
 
 def main():
     if _acquire_single_instance() is None:
-        print("LocalFlow tourne déjà.", flush=True)
+        print("AUR'IAFLOW tourne déjà.", flush=True)
         sys.exit(0)
     try:
         LocalFlowApp().run()
