@@ -51,6 +51,10 @@ OFFER_TIMEOUT_S = 25     # la proposition « enregistrer la réunion ? » dispar
 TAP_MAX_S = 0.3          # en dessous : c'est un tap, pas un push-to-talk
 DOUBLE_TAP_S = 0.45      # deux taps rapprochés : ouvre/ferme le panneau
 TAIL_S = 0.35            # audio conservé après le relâchement (dernier mot)
+# Témoin lu par run.sh et update.sh avant de relancer l'agent : tant qu'il est
+# frais, une dictée est en cours et un kickstart -k la ferait disparaître —
+# c'est arrivé trois fois le 2 septembre, dont une après 25 s de parole.
+BUSY_FILE = os.path.expanduser("~/Library/Caches/LocalFlow/busy")
 DEBUG_WAV = os.path.expanduser("~/Library/Caches/LocalFlow/last.wav")  # dernière dictée, pour diagnostiquer
 MIN_AUDIO_S = 0.35       # ignore les enregistrements plus courts
 MIN_VOICED_S = 0.12      # seuil bas : le détecteur ne compte que les pics (silence pur = 0,00 s)
@@ -394,6 +398,18 @@ class LocalFlowApp(rumps.App):
         except Exception:
             _log("menu : titres de marque non appliqués\n" + traceback.format_exc())
 
+    def _mark_busy(self, busy):
+        """Pose ou retire le témoin « dictée en cours ». Ne lève jamais."""
+        try:
+            if busy:
+                os.makedirs(os.path.dirname(BUSY_FILE), exist_ok=True)
+                with open(BUSY_FILE, "w") as f:
+                    f.write(str(int(time.time())))
+            elif os.path.exists(BUSY_FILE):
+                os.remove(BUSY_FILE)
+        except OSError:
+            pass
+
     def _set_icon(self, state):
         """Pose le monogramme dans la barre de menus. Le texte reste vide.
 
@@ -403,6 +419,7 @@ class LocalFlowApp(rumps.App):
         if state == self._icon_state:
             return
         self._icon_state = state
+        self._mark_busy(state in ("recording", "hands_free", "processing", "meeting"))
         path = theme.menubar_icon(state)
         try:
             if path:
