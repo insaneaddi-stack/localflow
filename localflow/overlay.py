@@ -63,8 +63,9 @@ WAVE_COUNT, WAVE_W, WAVE_GAP = 20, 2.5, 2.6   # mini-forme d'onde défilante
 PANEL_W, PANEL_H = 720.0, 292.0
 MEET_W, MEET_H = 118.0, 22.0          # réunion en cours : point rouge + chrono
 OFFER_W, OFFER_H = 452.0, 44.0        # « Appel X détecté » + [Enregistrer] [Ignorer]
+CAL_W, CAL_H = 560.0, 44.0            # aperçu agenda : « Demain 14:00 · Titre » + décompte
 MARGINS = {"idle": 14.0, "hover": 14.0, "recording": 18.0, "processing": 18.0, "expanded": 44.0,
-           "meeting": 14.0, "meeting_offer": 18.0}
+           "meeting": 14.0, "meeting_offer": 18.0, "calendar_preview": 18.0}
 
 # Le système AUR'IA n'a pas de rouge : « ce qui demande de l'attention est orange ».
 # Et il n'a qu'une seule action colorée par écran — d'où un seul accent ici, la
@@ -336,6 +337,8 @@ class _BandView(NSView):
             self._draw_meeting(content, k)
         elif st == "meeting_offer":
             self._draw_offer(content, k)
+        elif st == "calendar_preview":
+            self._draw_calendar(content, k)
         elif st == "hover":
             self._draw_idle(content, hover=True, k=k)
         else:
@@ -476,6 +479,35 @@ class _BandView(NSView):
         bx = pill.origin.x + pill.size.width - 18
         self._chip(bx - w_ign, cy - 12, "Ignorer", on=None, action="meeting_decline", alpha=k, min_w=w_ign)
         self._chip(bx - w_ign - gap - w_rec, cy - 12, "Enregistrer", on=True, action="meeting_accept", alpha=k, min_w=w_rec)
+
+    @objc.python_method
+    def _draw_calendar(self, pill, k):
+        """Aperçu avant écriture : « Demain 14:00 · Titre » et le temps qui reste.
+
+        Volontairement non cliquable : la bande ne doit jamais intercepter un
+        clic destiné au Dock (même raison que pour le survol). La seule sortie
+        est Esc, donc elle est écrite noir sur crème plutôt que sous-entendue.
+        """
+        ov = self.overlay
+        apercu = ov.calendar_preview or {}
+        r, g, b = ORANGE
+        cy = pill.origin.y + pill.size.height / 2.0
+        x = pill.origin.x + 18
+        NSColor.colorWithCalibratedRed_green_blue_alpha_(r, g, b, 0.9 * k).setFill()
+        NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(x, cy - 4, 8, 8)).fill()
+
+        restant = max(0.0, apercu.get("until", 0.0) - time.time())
+        note = f"Esc annule · {restant:0.0f} s" if restant >= 1.0 else "Envoi…"
+        attrs_note = _attrs(11.5, 0.62 * k, weight=0.5)
+        w_note = _text_width(note, attrs_note) + 6
+
+        text_w = pill.size.width - 18 - 16 - w_note - 18
+        if text_w < 8.0 or pill.size.height < 20.0:
+            return          # pilule encore en pleine transition (voir _draw_progress)
+        _draw_text(apercu.get("label", ""), NSMakeRect(x + 16, cy - 8, text_w, 16),
+                   _attrs(12.5, 0.94 * k, weight=0.4, truncate=True))
+        _draw_text(note, NSMakeRect(pill.origin.x + pill.size.width - 18 - w_note, cy - 8, w_note, 16),
+                   attrs_note)
 
     @objc.python_method
     def _draw_recording(self, pill, k):
@@ -848,6 +880,7 @@ class Overlay:
         self.state = "idle"
         self.base_state = "idle"        # "meeting" pendant une réunion : état de repos
         self.meeting_info = lambda: {}  # fourni par l'app : {"clock", "sys_level", "offer"}
+        self.calendar_preview = None    # {"label", "until"} pendant l'aperçu agenda
         self.phase = 0.0
         self.level = 0.0
         self.bars = [0.0] * BAR_COUNT
@@ -1058,6 +1091,7 @@ class Overlay:
             "expanded": (PANEL_W, PANEL_H),
             "meeting": (MEET_W, MEET_H),
             "meeting_offer": (OFFER_W, OFFER_H),
+            "calendar_preview": (CAL_W, CAL_H),
         }[state]
         return (w, h, MARGINS[state])
 
@@ -1115,6 +1149,16 @@ class Overlay:
 
     def set_text(self, text):
         """Conservé pour compatibilité : plus de texte en direct."""
+
+    def begin_calendar_preview(self, label, seconds):
+        """API app : montre l'événement compris et le temps qu'il reste pour Esc."""
+        self.calendar_preview = {"label": label, "until": time.time() + seconds}
+        self._set_state("calendar_preview")
+
+    def end_calendar_preview(self):
+        self.calendar_preview = None
+        if self.state == "calendar_preview":
+            self._set_state(self.base_state)
 
     def toggle_expanded(self):
         self._set_state(self.base_state if self.state == "expanded" else "expanded")

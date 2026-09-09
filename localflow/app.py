@@ -23,6 +23,8 @@ from AppKit import NSApp, NSImage, NSOperationQueue
 
 from .audio import SAMPLE_RATE, Recorder, audio_stuck
 from . import theme
+from . import timetree
+from .calendar_intent import CalendarIntent
 from .cleanup import Cleaner, cleanup_rules
 from .commands import UNDO, apply_commands
 from .config import Config
@@ -227,6 +229,8 @@ class LocalFlowApp(rumps.App):
         self.item_tone = self._toggle_item("Ton adapté à l'app", "tone_auto")
         self.item_sounds = self._toggle_item("Sons", "sounds_enabled")
         self.item_mic = self._toggle_item("Micro toujours prêt (point orange permanent)", "mic_always_on", self._toggle_mic)
+        self.item_calendar = self._toggle_item("Agenda : fn+⇧ envoie dans TimeTree", "calendar_enabled",
+                                               self._toggle_calendar)
         self.item_panel = rumps.MenuItem("Panneau (double-tap fn)", callback=lambda _i: self.overlay.toggle_expanded())
         self.item_history = rumps.MenuItem("Historique…", callback=self._open_history)
         self.item_dict = rumps.MenuItem("Dictionnaire…", callback=self._open_dictionary)
@@ -276,6 +280,7 @@ class LocalFlowApp(rumps.App):
             self.item_fast,
             self.item_sounds,
             self.item_mic,
+            self.item_calendar,
             None,
             self.item_perms,
             self.item_tutorial,
@@ -299,6 +304,13 @@ class LocalFlowApp(rumps.App):
                                            on_error=lambda msg: _notify("Réunion", msg),
                                            language=self.config.meeting_language)
         self.summarizer = Summarizer(self.config.meeting_summary_model, _log, shared=self.cleaner)
+        # Même Qwen3-1.7B que le nettoyage : le partage évite un second Go en RAM.
+        self.calendar = CalendarIntent(shared=self.cleaner)
+        if self.config.calendar_enabled:
+            # Journalisé, pas notifié : l'agent redémarre tout seul et une
+            # notification à chaque lancement finirait par ne plus être lue.
+            for manque in timetree.prerequisites(self.config.calendar_mcp_path):
+                _log(f"agenda indisponible : {manque}")
         self.meeting_index = MeetingIndex()
         self.detector = MeetingDetector()
         self._offer_t0 = 0.0
@@ -1059,6 +1071,10 @@ class LocalFlowApp(rumps.App):
             text = self.learner.apply(self.dictionary.apply(text))  # le LLM a pu ré-écorcher un nom
             text = apply_commands(text)
 
+            if mode == "calendar" and text is not UNDO:
+                self._to_calendar(text, gen)
+                return
+
             if text is UNDO:
                 press_undo()
                 _log("commande vocale : annulation (Cmd+Z)")
@@ -1121,6 +1137,90 @@ class LocalFlowApp(rumps.App):
         if item.state:
             self._jobs.put(("preload", None))
 
+    def _toggle_calendar(self, item):
+        """Dit tout de suite ce qui manque, plutôt qu'au premier fn+⇧ raté."""
+        if not item.state:
+            return
+        manques = timetree.prerequisites(self.config.calendar_mcp_path)
+        if manques:
+            _log("agenda : " + " | ".join(manques))
+            _notify("Agenda pas prêt", manques[0])
+
+    # ---------- agenda ----------
+
+    def _to_calendar(self, text, gen):
+        """Phrase comprise → aperçu annulable → TimeTree. Sur le thread worker.
+
+        L'ordre compte : on chauffe le serveur MCP (lancement + login, ~1 s)
+        PENDANT l'aperçu, mais on n'écrit qu'après. L'attente est donc invisible
+        et l'annulation reste honnête — rien n'est parti tant qu'Esc est encore
+        possible.
+        """
+        if not text:
+            _log("agenda : transcription vide")
+            _on_main(self.overlay.hide)
+            return
+
+        with self.model_lock:
+            event = self.calendar.parse(text)
+        if job_aborted(gen, self._abort_gen):
+            _log("agenda : annulé (Esc) pendant la lecture de la phrase")
+            return
+
+        if event is None:
+            # On ne colle rien dans l'app active : personne n'a demandé du texte,
+            # on a demandé un événement. Mais la phrase ne doit pas disparaître.
+            copy_text(text)
+            self.config.add_history(text, app="Agenda")
+            _on_main(self.history_window.refresh)
+            _log("agenda : aucune date comprise, phrase mise dans le presse-papier")
+            _notify("Aucune date comprise", "La phrase est dans le presse-papier.")
+            _on_main(self.overlay.hide)
+            return
+
+        client = timetree.TimeTreeMCP(self.config.calendar_mcp_path, log=_log)
+        chauffe = {"ok": False, "message": "chauffe non terminée"}
+
+        def _chauffer():
+            chauffe["ok"], chauffe["message"] = client.warm(self.config.calendar_id)
+
+        fil = threading.Thread(target=_chauffer, daemon=True, name="timetree-warm")
+        fil.start()
+
+        delai = self.config.calendar_preview_s
+        _on_main(lambda: self.overlay.begin_calendar_preview(
+            f"{event['_libelle']} · {event['title']}", delai))
+        _log(f"agenda : aperçu {delai:.0f} s — {event['_libelle']}")
+
+        fin = time.time() + delai
+        while time.time() < fin:
+            if job_aborted(gen, self._abort_gen):
+                _log("agenda : annulé (Esc) pendant l'aperçu, rien n'a été écrit")
+                client.close()
+                _on_main(self.overlay.end_calendar_preview)
+                return
+            time.sleep(0.05)
+
+        fil.join(timeout=20)
+        try:
+            if not chauffe["ok"]:
+                raise RuntimeError(chauffe["message"])
+            ok, message = client.create(self.config.calendar_id, event)
+        except Exception as exc:
+            ok, message = False, str(exc)
+        finally:
+            client.close()
+            _on_main(self.overlay.end_calendar_preview)
+
+        if ok:
+            _log(f"agenda : « {event['_libelle']} » créé")
+            _notify("Ajouté à ton agenda", f"{event['_libelle']} · {event['title']}")
+        else:
+            timetree.log_failure(event, message)
+            _log(f"agenda : échec — {message}")
+            _notify("Événement non créé", f"{message[:120]} — gardé dans "
+                                          f"{os.path.basename(timetree.JOURNAL_ECHECS)}")
+
     def _refresh_stats(self):
         try:
             t = self.config.stats_summary()["today"]
@@ -1168,6 +1268,7 @@ class LocalFlowApp(rumps.App):
                 ("Nettoyage IA", "cleanup_enabled", self.config.cleanup_enabled),
                 ("Ton auto", "tone_auto", self.config.tone_auto),
                 ("Sons", "sounds_enabled", self.config.sounds_enabled),
+                ("Agenda (fn+⇧)", "calendar_enabled", self.config.calendar_enabled),
             ],
             "actions": [("Re-coller", "repaste", "arrow.uturn.backward"), ("Historique", "history", "clock"), ("Dictionnaire", "dict", "book")],
         }
@@ -1184,11 +1285,14 @@ class LocalFlowApp(rumps.App):
                 self.overlay.flash_index = 3
                 self.overlay.flash_t0 = time.time()
         elif action == "toggle":
-            item = {"cleanup_enabled": self.item_cleanup, "tone_auto": self.item_tone, "sounds_enabled": self.item_sounds}[payload]
+            item = {"cleanup_enabled": self.item_cleanup, "tone_auto": self.item_tone,
+                    "sounds_enabled": self.item_sounds, "calendar_enabled": self.item_calendar}[payload]
             item.state = not item.state
             setattr(self.config, payload, bool(item.state))
             if payload == "cleanup_enabled" and item.state:
                 self._jobs.put(("preload", None))
+            if payload == "calendar_enabled" and item.state:
+                self._toggle_calendar(item)
         elif action == "repaste":
             hist = self.config.history
             if hist:

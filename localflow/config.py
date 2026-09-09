@@ -23,6 +23,7 @@ DEFAULTS = {
     "calendar_enabled": False,   # fn+⇧ envoie la dictée vers TimeTree au lieu de la taper
     "calendar_id": "1001056215", # Calendrier Louqman
     "calendar_preview_s": 3.0,   # aperçu annulable (Esc) avant que l'événement parte
+    "calendar_mcp_path": "~/Desktop/Projects/TIMETREE/dist/index.js",   # serveur MCP TimeTree
     "decode_times": [],          # [[durée audio s, temps de décodage s]] : calibre la barre de progression
     "history": [],               # [{"t": iso, "text": str, "app": str}], plus récent en premier
     "stats": {},                 # {"YYYY-MM-DD": {"words": n, "dictations": n, "audio_s": s}}
@@ -91,6 +92,11 @@ class Config:
     meeting_language = _str_prop("meeting_language")
     meeting_folder = _str_prop("meeting_folder")
     calendar_id = _str_prop("calendar_id")
+
+    @property
+    def calendar_mcp_path(self):
+        return os.path.expanduser(str(self.data.get("calendar_mcp_path")
+                                      or DEFAULTS["calendar_mcp_path"]))
 
     @property
     def calendar_preview_s(self):

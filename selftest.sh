@@ -32,7 +32,7 @@ os.path.exists(A.CRASH_FILE) and os.remove(A.CRASH_FILE)
 assert vus == ['AUR\'IAFLOW ne démarre plus'], vus"
 NAME="fiabilité : run.sh protège l'app qui tourne"; t sh -c 'grep -q preflight run.sh && grep -q wait_idle run.sh && bash -n run.sh'
 NAME="nettoyage : corpus de dictées";  t $PY -m unittest discover -s tests -q
-NAME="bash -n des scripts";           t bash -n install.sh setup.sh build-app.sh install-agent.sh run.sh update.sh uninstall.sh helpers/audiotap/build.sh
+NAME="bash -n des scripts";           t bash -n install.sh setup.sh build-app.sh install-agent.sh install-timetree.sh run.sh update.sh uninstall.sh helpers/audiotap/build.sh
 NAME="helper audiotap présent";       t test -x helpers/audiotap/audiotap
 NAME="helper audiotap --probe";       t helpers/audiotap/audiotap --probe
 NAME="Info.plist du bundle complet";  t sh -c 'plutil -p LocalFlow.app/Contents/Info.plist | grep -q NSMicrophoneUsageDescription && plutil -p LocalFlow.app/Contents/Info.plist | grep -q NSAudioCaptureUsageDescription && test -x LocalFlow.app/Contents/Helpers/audiotap'
@@ -173,15 +173,17 @@ from AppKit import NSApplication; NSApplication.sharedApplication()
 from localflow.overlay import Overlay
 ov=Overlay(lambda:0.2, lambda:{'tiles':[{'title':'x','subtitle':'y','color':(1,0,0),'on':True,'action':'a'}]}, lambda a,p:None)
 ov.meeting_info=lambda:{'clock':'01:23','sys_level':0.3,'offer':'Zoom'}
-for st in ('meeting','meeting_offer','expanded','recording','processing','hover','idle'):
+import time as _t; ov.calendar_preview={'label':'Demain 14:00 · Présenter le directeur commercial à César','until':_t.time()+3}
+for st in ('meeting','meeting_offer','calendar_preview','expanded','recording','processing','hover','idle'):
     ov._set_state(st); ov.content_alpha=1.0; ov.cur_w,ov.cur_h,_=ov._target_size(st); ov.view.display()"
-NAME="overlay : les 42 transitions, frame par frame"; t $PY -c "
+NAME="overlay : les 56 transitions, frame par frame"; t $PY -c "
 from AppKit import NSApplication, NSMakeRect; NSApplication.sharedApplication()
 import localflow.overlay as O, itertools, time
 ov=O.Overlay(lambda:0.4, lambda:{'tiles':[],'status':'x','stats_line':'y'}, lambda a,p:None)
 ov.meeting_info=lambda:{'clock':'1:02','sys_level':0.3,'offer':'Zoom'}
 ov.wave=[0.4]*O.WAVE_COUNT; ov.rec_t0=time.time()
-S=('idle','hover','recording','processing','meeting','meeting_offer','expanded')
+ov.calendar_preview={'label':'Demain 14:00 · Un titre assez long pour devoir être coupé proprement','until':time.time()+3}
+S=('idle','hover','recording','processing','meeting','meeting_offer','calendar_preview','expanded')
 # Pendant une transition la taille est interpolée : une largeur calculée par
 # soustraction peut devenir négative et faire planter drawRect_ (déjà arrivé).
 # On rejoue donc chaque paire d'états sur toute la durée, fondu croisé compris.

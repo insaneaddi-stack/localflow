@@ -26,7 +26,13 @@ import time
 JOURNAL_ECHECS = os.path.expanduser("~/.localflow.calendar-failed.jsonl")
 SERVICE_TROUSSEAU = "LocalFlow TimeTree"
 
-REPONSE_TIMEOUT_S = 75.0     # le serveur coupe ses propres requêtes à 60 s
+# Le serveur coupe ses propres requêtes HTTP à 60 s, mais on ne peut pas
+# l'attendre aussi longtemps : côté app, le watchdog considère le pipeline
+# coincé au bout de 90 s (BUSY_TIMEOUT_S) et se débloquerait pendant qu'on
+# écrit encore. Pire cas tenu ici : 30 s de chauffe + 45 s d'écriture + 3 s
+# d'aperçu = 78 s. Au-delà, l'écriture est déclarée incertaine et journalisée —
+# on ne la rejoue pas à l'aveugle.
+REPONSE_TIMEOUT_S = 45.0
 TENTATIVES = 3
 
 
