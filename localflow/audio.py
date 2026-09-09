@@ -162,6 +162,14 @@ class Recorder:
         self.noise_floor = 0.002
         self.voiced_s = 0.0       # secondes de vraie parole dans l'enregistrement courant
         self.live_queue = None
+        # Flux muet : CoreAudio garde parfois le flux « ouvert » mais ne livre que
+        # des zéros exacts (vu quatre fois dans le log, toujours après une
+        # ouverture ; −174 dBFS). Une réouverture le remet en marche. On date le
+        # premier bloc nul pour le détecter, et on ne juge que sur des zéros
+        # EXACTS : un vrai micro dans une pièce silencieuse a toujours du souffle.
+        self._silent_since = 0.0
+        self.opened_at = 0.0
+        self.last_reopen = None   # pourquoi start() a rouvert le flux (journal)
 
     # ---- flux permanent ----
 
@@ -185,6 +193,8 @@ class Recorder:
                 blocksize=BLOCK, callback=self._callback,
             )
             self._last_callback = time.time()
+            self._silent_since = 0.0
+            self.opened_at = time.time()
 
     def _close_stream(self):
         stream, self._stream = self._stream, None
@@ -201,7 +211,18 @@ class Recorder:
         dev = default_input_id()
         if dev and dev != self._device_id:
             return False
+        if self.muted(2.0):
+            return False
         return True
+
+    def muted(self, min_s=0.5):
+        """Vrai si le flux est ouvert mais ne livre que des zéros exacts depuis min_s."""
+        if self._stream is None or not self._silent_since:
+            return False
+        return time.time() - self._silent_since > min_s
+
+    def muted_for(self):
+        return (time.time() - self._silent_since) if self._silent_since else 0.0
 
     def stalled(self, max_gap=1.5):
         """Pendant une dictée : vrai si le micro ne livre plus rien (périphérique parti)."""
@@ -216,6 +237,11 @@ class Recorder:
     def _callback(self, indata, frames, time_info, status):
         self._last_callback = time.time()
         mono = indata[:, 0].astype(np.float32)
+        if mono.size and not np.any(mono):
+            if not self._silent_since:
+                self._silent_since = self._last_callback
+        else:
+            self._silent_since = 0.0
         # passe-haut : retire grondements, souffle de ventilation, chocs sur la table
         y = np.empty_like(mono)
         px, py = self._hp_x, self._hp_y
@@ -272,7 +298,11 @@ class Recorder:
         return self._recording
 
     def start(self, live=False):
-        if self._stream is None or not self.healthy():
+        self.last_reopen = None
+        if self._stream is not None and self.muted(0.5):
+            self.last_reopen = f"flux muet (zéros exacts depuis {self.muted_for():.1f} s)"
+            self.open()
+        elif self._stream is None or not self.healthy():
             self.open()          # micro fermé (mode économe) ou périphérique changé : (ré)ouverture
         with self._lock:
             if self._recording:

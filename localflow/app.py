@@ -735,6 +735,11 @@ class LocalFlowApp(rumps.App):
                 self._suppress_next_release = True
                 self._finish_recording()  # on TERMINE : le texte de l'utilisateur n'est pas jeté
             if not self.recorder.recording:
+                if self.recorder.open_ and self.recorder.muted(2.0) \
+                        and time.time() - getattr(self, "_mute_reopen_t", 0.0) > 10.0:
+                    self._mute_reopen_t = time.time()
+                    _log(f"santé: flux muet (zéros exacts depuis {self.recorder.muted_for():.1f} s) → réouverture")
+                    self._open_mic()
                 if self.config.mic_always_on:
                     if not self.recorder.healthy():
                         self._open_mic()  # flux mort ou périphérique changé (AirPods…)
@@ -799,6 +804,8 @@ class LocalFlowApp(rumps.App):
         live = self.config.live_enabled and self.transcriber is not None
         try:
             self.recorder.start(live=live)
+            if self.recorder.last_reopen:
+                _log(f"micro rouvert avant la dictée : {self.recorder.last_reopen}")
         except Exception as exc:
             _log("échec ouverture micro:\n" + traceback.format_exc())
             _notify("Micro indisponible", str(exc))
@@ -944,7 +951,16 @@ class LocalFlowApp(rumps.App):
             return
         voiced = self.recorder.voiced_s
         if voiced < MIN_VOICED_S:
-            _log(f"audio {len(audio)/SAMPLE_RATE:.2f}s mais {voiced:.2f}s de voix (bruit {20*np.log10(self.recorder.noise_floor+1e-9):.0f} dBFS) → rien entendu, ignoré")
+            if not np.any(audio):
+                # Zéros exacts : ce n'est pas une pièce silencieuse, c'est un flux
+                # muet. On le rouvre tout de suite, sans attendre le délai
+                # d'inactivité, et on le dit : la phrase est à redire.
+                _log(f"audio {len(audio)/SAMPLE_RATE:.2f}s de silence numérique (flux muet depuis "
+                     f"{self.recorder.muted_for():.1f} s, ouvert depuis {time.time()-self.recorder.opened_at:.0f} s) → réouverture du micro")
+                self._open_mic()
+                _notify("Micro muet", "Le micro ne livrait que du silence : il est rouvert. Redis ta phrase.")
+            else:
+                _log(f"audio {len(audio)/SAMPLE_RATE:.2f}s mais {voiced:.2f}s de voix (bruit {20*np.log10(self.recorder.noise_floor+1e-9):.0f} dBFS) → rien entendu, ignoré")
             self.overlay.hide()
             self._set_icon(self._idle_state())
             return
