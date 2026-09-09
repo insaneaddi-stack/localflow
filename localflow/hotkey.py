@@ -18,6 +18,7 @@ import Quartz
 
 FN_KEYCODE = 63
 SPACE_KEYCODE = 49
+SHIFT_KEYCODES = (56, 60)        # ⇧ gauche, ⇧ droite
 FLAG_FN = Quartz.kCGEventFlagMaskSecondaryFn
 FLAG_SHIFT = Quartz.kCGEventFlagMaskShift
 
@@ -38,22 +39,25 @@ def fn_down_now():
 class FnListener:
     """Callbacks (appelés depuis le thread du tap — renvoyer sur le main thread) :
 
-    - on_down(shift) : fn vient d'être enfoncé ; shift dit si ⇧ était DÉJÀ tenu
-                       à cet instant précis (accord fn+⇧ → dictée vers l'agenda).
-                       Un ⇧ pressé après coup ne compte pas : l'accord se juge
-                       au moment où fn descend, sinon une majuscule tapée en
-                       cours de dictée changerait le mode dans ton dos.
+    - on_down(shift) : fn vient d'être enfoncé ; shift dit si ⇧ était déjà tenu
+                       à cet instant (accord fn+⇧ → dictée vers l'agenda).
+    - on_shift()     : ⇧ vient d'être enfoncé ALORS que fn l'était déjà.
+                       Nécessaire parce que « les deux en même temps » ne l'est
+                       jamais vraiment : si fn descend une fraction de seconde
+                       avant ⇧, on_down ne voit rien. C'est l'app qui décide si
+                       c'est encore assez tôt pour compter (voir mode_upgrade).
     - on_up()        : fn vient d'être relâché
     - on_fn_space()  : espace pressé pendant que fn est maintenu (avalé)
     - on_fn_other()  : une autre touche pressée pendant que fn est maintenu
     """
 
-    def __init__(self, on_down, on_up, on_fn_space, on_fn_other, on_key=None):
+    def __init__(self, on_down, on_up, on_fn_space, on_fn_other, on_key=None, on_shift=None):
         self.on_key = on_key      # on_key(keycode) -> True pour avaler la touche (panneau ouvert)
         self.on_down = on_down
         self.on_up = on_up
         self.on_fn_space = on_fn_space
         self.on_fn_other = on_fn_other
+        self.on_shift = on_shift or (lambda: None)
         self._pressed = False
         self._tap = None
         self._source = None
@@ -172,6 +176,9 @@ class FnListener:
                     elif not down and self._pressed:
                         self._pressed = False
                         self.on_up()
+                elif keycode in SHIFT_KEYCODES and self._pressed:
+                    if Quartz.CGEventGetFlags(event) & FLAG_SHIFT:
+                        self.on_shift()
                 return event
 
             if etype == Quartz.kCGEventKeyDown and not self._pressed and self.on_key is not None:

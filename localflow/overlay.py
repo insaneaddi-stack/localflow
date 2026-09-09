@@ -532,6 +532,15 @@ class _BandView(NSView):
         cy = py + ph / 2.0 + 3.0   # 3 px de plus haut : le fil passe dessous
         max_h = ph - 20.0
 
+        if ov.rec_calendar:
+            # Un point orange dans la marge gauche : cette dictée ne sera pas
+            # tapée, elle part dans l'agenda. Sans ce témoin, on ne l'apprend
+            # qu'à la fin — et c'est trop tard pour se corriger.
+            r, g, b = ORANGE
+            NSColor.colorWithCalibratedRed_green_blue_alpha_(r, g, b, 0.95 * k).setFill()
+            NSBezierPath.bezierPathWithOvalInRect_(
+                NSMakeRect(px + 6.0, py + ph / 2.0 - 3.0, 6.0, 6.0)).fill()
+
         total = WAVE_COUNT * WAVE_W + (WAVE_COUNT - 1) * WAVE_GAP
         x0 = track_x + (track_w - total) / 2.0
         # Entrée en éventail depuis le centre : les barres apparaissaient d'un bloc.
@@ -900,6 +909,7 @@ class Overlay:
         self._wave_tick = 0
         self.rec_t0 = 0.0
         self.rec_hands_free = False
+        self.rec_calendar = False   # point orange : cette dictée part dans l'agenda
         self.hf_t0 = 0.0
 
         # progression de la transcription (voir begin_progress)
@@ -1046,13 +1056,14 @@ class Overlay:
 
     # ---- enregistrement ----
 
-    def begin_recording(self, hands_free=False):
+    def begin_recording(self, hands_free=False, calendar=False):
         self.hf_t0 = 0.0
         """Remet la forme d'onde à plat et démarre le chrono."""
         self.wave = [0.0] * WAVE_COUNT
         self._wave_tick = 0
         self.rec_t0 = time.time()
         self.rec_hands_free = bool(hands_free)
+        self.rec_calendar = bool(calendar)
 
     # ---- progression de la transcription ----
 

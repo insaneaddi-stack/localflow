@@ -169,6 +169,23 @@ def job_aborted(gen, abort_gen):
     return gen <= abort_gen
 
 
+SHIFT_GRACE_S = 0.6      # ⇧ arrivé après fn compte encore comme un accord
+
+
+def mode_upgrade(mode, elapsed_s, recording, calendar_enabled):
+    """⇧ enfoncé APRÈS fn : est-ce encore le même geste ?
+
+    « fn+⇧ en même temps » ne l'est jamais vraiment. Mesuré en usage réel : le
+    mode n'était jamais armé, parce que fn descendait systématiquement avant ⇧.
+    On accepte donc ⇧ tant qu'on est dans les premières fractions de seconde —
+    avant que la phrase ait commencé. Au-delà, c'est un ⇧ sans rapport et le
+    mode ne bouge plus.
+    """
+    if mode == "calendar" or not calendar_enabled or not recording:
+        return mode
+    return "calendar" if 0.0 <= elapsed_s <= SHIFT_GRACE_S else mode
+
+
 def dictation_mode(shift_held, calendar_enabled):
     """Où va cette dictée : « calendar » (TimeTree) ou « dictation » (tapée).
 
@@ -329,6 +346,7 @@ class LocalFlowApp(rumps.App):
         self.listener = FnListener(
             lambda shift: _on_main(lambda: self._on_fn_down(shift)), lambda: _on_main(self._on_fn_up),
             lambda: _on_main(self._on_fn_space), lambda: _on_main(self._on_fn_other), self._on_key,
+            lambda: _on_main(self._on_shift),
         )
         self._listener_ok = False
         self._start_listener()
@@ -652,6 +670,19 @@ class LocalFlowApp(rumps.App):
             return
         self._finish_recording()
 
+    def _on_shift(self):
+        """⇧ enfoncé pendant que fn l'est déjà : rattrape l'accord fn+⇧."""
+        avant = self._mode
+        self._mode = mode_upgrade(
+            self._mode,
+            time.time() - self._press_time if self._press_time else 99.0,
+            self.recorder.recording,
+            self.config.calendar_enabled,
+        )
+        if self._mode != avant:
+            self.overlay.rec_calendar = True   # point orange : le mode est armé
+            _log("⇧ juste après fn → agenda")
+
     def _on_fn_space(self):
         """fn + espace : bascule en mains-libres (fn seul pour terminer)."""
         if self.hands_free or not self.recorder.recording:
@@ -836,7 +867,8 @@ class LocalFlowApp(rumps.App):
             return
         self._record_start = time.time()
         self._set_icon("recording")
-        self.overlay.begin_recording(hands_free=self.hands_free)
+        self.overlay.begin_recording(hands_free=self.hands_free,
+                                     calendar=self._mode == "calendar")
         self.overlay.show("recording")
         if live:
             self._live = _LiveRun()
