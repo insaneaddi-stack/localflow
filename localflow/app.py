@@ -105,10 +105,9 @@ def _on_main(fn):
 
     NSOperationQueue.mainQueue().addOperationWithBlock_(safe)
 
-def _notify(title, message):
-    """Notification macOS via osascript (fiable même sans bundle .app)."""
-    if title.lower().startswith("erreur") or "indisponible" in title.lower() or "requise" in title.lower():
-        _log(f"ERREUR {title}: {message}")
+def _notify_osascript(title, message):
+    """Repli : marche même sans bundle, mais la notification porte l'icône
+    d'AppleScript — c'est macOS qui l'attribue au binaire qui l'envoie."""
     safe = lambda s: str(s).replace("\\", "\\\\").replace('"', '\\"')
     try:
         subprocess.Popen(
@@ -118,6 +117,28 @@ def _notify(title, message):
         )
     except Exception:
         print(f"{theme.NOM} — {title}: {message}")
+
+def _notify(title, message):
+    """Notification macOS, postée PAR L'APP pour qu'elle porte son icône.
+
+    Tout passait par osascript : macOS attribuait alors la notification au
+    binaire AppleScript et affichait son icône générique. Le nom « AUR'IAFLOW »
+    n'était que du texte glissé dans le titre. Envoyée depuis le bundle signé,
+    elle porte l'icône et le nom de la marque, et le titre redevient libre.
+    """
+    if title.lower().startswith("erreur") or "indisponible" in title.lower() or "requise" in title.lower():
+        _log(f"ERREUR {title}: {message}")
+
+    def poster():
+        try:
+            rumps.notification(title, "", message)
+        except Exception:
+            _notify_osascript(title, message)
+
+    try:
+        _on_main(poster)      # deliverNotification_ veut le thread principal
+    except Exception:
+        _notify_osascript(title, message)   # avant que NSApp existe
 
 def _mem_state():
     """Swap utilisé / libre (diagnostic des lenteurs)."""

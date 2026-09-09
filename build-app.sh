@@ -53,8 +53,12 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-    <key>CFBundleName</key><string>LocalFlow</string>
-    <key>CFBundleDisplayName</key><string>LocalFlow</string>
+    <!-- Le nom affiché est celui de la marque : c'est lui que macOS met en
+         en-tête des notifications et dans les réglages de Notifications.
+         L'identifiant et l'exécutable ne bougent pas — les autorisations TCC
+         y sont accrochées. -->
+    <key>CFBundleName</key><string>AUR'IAFLOW</string>
+    <key>CFBundleDisplayName</key><string>AUR'IAFLOW</string>
     <key>CFBundleIdentifier</key><string>com.louqui.localflow</string>
     <key>CFBundleVersion</key><string>2.0</string>
     <key>CFBundleShortVersionString</key><string>2.0</string>
@@ -63,8 +67,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleIconFile</key><string>LocalFlow</string>
     <key>LSUIElement</key><true/>
     <key>NSHighResolutionCapable</key><true/>
-    <key>NSMicrophoneUsageDescription</key><string>LocalFlow écoute ta voix pour la dicter, 100 % en local.</string>
-    <key>NSAudioCaptureUsageDescription</key><string>LocalFlow enregistre le son de tes réunions (Zoom, Meet, Teams…) pour les transcrire, 100 % en local.</string>
+    <key>NSMicrophoneUsageDescription</key><string>AUR'IAFLOW écoute ta voix pour la dicter, 100 % en local.</string>
+    <key>NSAudioCaptureUsageDescription</key><string>AUR'IAFLOW enregistre le son de tes réunions (Zoom, Meet, Teams…) pour les transcrire, 100 % en local.</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
 </dict></plist>
 PLIST
