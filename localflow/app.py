@@ -167,6 +167,16 @@ def job_aborted(gen, abort_gen):
     return gen <= abort_gen
 
 
+def dictation_mode(shift_held, calendar_enabled):
+    """Où va cette dictée : « calendar » (TimeTree) ou « dictation » (tapée).
+
+    L'accord fn+⇧ se juge au seul instant où fn descend. Réglage éteint ou ⇧
+    relâché : on retombe sur la dictée normale — le mode dégradé doit toujours
+    être celui qui ne surprend personne.
+    """
+    return "calendar" if (shift_held and calendar_enabled) else "dictation"
+
+
 class LocalFlowApp(rumps.App):
     def __init__(self):
         super().__init__("", quit_button=None)
@@ -302,9 +312,10 @@ class LocalFlowApp(rumps.App):
         self._meeting_log_status()
         self._last_tap = 0.0
         self._finishing = False
+        self._mode = "dictation"   # latché au fn down : « calendar » si ⇧ était tenu
         # Le tap tourne sur son propre thread : on renvoie chaque callback sur le thread principal.
         self.listener = FnListener(
-            lambda: _on_main(self._on_fn_down), lambda: _on_main(self._on_fn_up),
+            lambda shift: _on_main(lambda: self._on_fn_down(shift)), lambda: _on_main(self._on_fn_up),
             lambda: _on_main(self._on_fn_space), lambda: _on_main(self._on_fn_other), self._on_key,
         )
         self._listener_ok = False
@@ -593,7 +604,7 @@ class LocalFlowApp(rumps.App):
 
     # ---------- touche fn ----------
 
-    def _on_fn_down(self):
+    def _on_fn_down(self, shift=False):
         if self._busy and time.time() - self._busy_since > BUSY_TIMEOUT_S:
             _log("watchdog: pipeline coincé, déblocage forcé")
             self._busy = False
@@ -605,7 +616,8 @@ class LocalFlowApp(rumps.App):
         if self.transcriber is None or self._busy or self._finishing:
             _log(f"fn ignoré (modèle prêt: {self.transcriber is not None}, busy: {self._busy})")
             return
-        _log("fn down")
+        self._mode = dictation_mode(shift, self.config.calendar_enabled)
+        _log("fn down" + (" + ⇧ → agenda" if self._mode == "calendar" else ""))
         self.learner.check_async()  # a-t-on corrigé à la main le dernier collage ?
         self._press_time = time.time()
         self._start_recording()
@@ -971,7 +983,7 @@ class LocalFlowApp(rumps.App):
         self._busy = True
         self._busy_since = time.time()
         self._jobs.put(("audio", {"audio": audio, "live": self._live, "app": self._ctx_app,
-                                  "voiced": voiced, "gen": self._gen}))
+                                  "voiced": voiced, "gen": self._gen, "mode": self._mode}))
         self._live = None
 
     # ---------- pipeline ----------
@@ -997,6 +1009,7 @@ class LocalFlowApp(rumps.App):
         audio, live, (bundle, app_name) = job["audio"], job["live"], job["app"]
         voiced = job.get("voiced", len(audio) / SAMPLE_RATE)
         gen = job.get("gen", 0)
+        mode = job.get("mode", "dictation")
         self._save_debug(audio)
         try:
             if job_aborted(gen, self._abort_gen):

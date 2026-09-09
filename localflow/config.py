@@ -20,6 +20,9 @@ DEFAULTS = {
     "meeting_language": "fr",    # "fr" / "en" / "" (auto) : langue figée pour les réunions
     "meeting_folder": "",        # vide = ~/Documents/LocalFlow Réunions
     "meeting_keep_audio": True,  # garder l'audio .m4a à côté du .md
+    "calendar_enabled": False,   # fn+⇧ envoie la dictée vers TimeTree au lieu de la taper
+    "calendar_id": "1001056215", # Calendrier Louqman
+    "calendar_preview_s": 3.0,   # aperçu annulable (Esc) avant que l'événement parte
     "decode_times": [],          # [[durée audio s, temps de décodage s]] : calibre la barre de progression
     "history": [],               # [{"t": iso, "text": str, "app": str}], plus récent en premier
     "stats": {},                 # {"YYYY-MM-DD": {"words": n, "dictations": n, "audio_s": s}}
@@ -72,6 +75,7 @@ class Config:
     mic_always_on = _bool_prop("mic_always_on")
     meeting_auto_detect = _bool_prop("meeting_auto_detect")
     meeting_keep_audio = _bool_prop("meeting_keep_audio")
+    calendar_enabled = _bool_prop("calendar_enabled")
 
     def _str_prop(key):
         def fget(self):
@@ -86,6 +90,14 @@ class Config:
     meeting_summary_model = _str_prop("meeting_summary_model")
     meeting_language = _str_prop("meeting_language")
     meeting_folder = _str_prop("meeting_folder")
+    calendar_id = _str_prop("calendar_id")
+
+    @property
+    def calendar_preview_s(self):
+        try:
+            return max(0.0, float(self.data.get("calendar_preview_s", DEFAULTS["calendar_preview_s"])))
+        except (TypeError, ValueError):
+            return DEFAULTS["calendar_preview_s"]
 
     # ---- historique ----
 

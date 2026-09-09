@@ -19,6 +19,7 @@ import Quartz
 FN_KEYCODE = 63
 SPACE_KEYCODE = 49
 FLAG_FN = Quartz.kCGEventFlagMaskSecondaryFn
+FLAG_SHIFT = Quartz.kCGEventFlagMaskShift
 
 def fn_down_now():
     """État PHYSIQUE de la touche fn, sans passer par le tap.
@@ -37,7 +38,11 @@ def fn_down_now():
 class FnListener:
     """Callbacks (appelés depuis le thread du tap — renvoyer sur le main thread) :
 
-    - on_down()      : fn vient d'être enfoncé
+    - on_down(shift) : fn vient d'être enfoncé ; shift dit si ⇧ était DÉJÀ tenu
+                       à cet instant précis (accord fn+⇧ → dictée vers l'agenda).
+                       Un ⇧ pressé après coup ne compte pas : l'accord se juge
+                       au moment où fn descend, sinon une majuscule tapée en
+                       cours de dictée changerait le mode dans ton dos.
     - on_up()        : fn vient d'être relâché
     - on_fn_space()  : espace pressé pendant que fn est maintenu (avalé)
     - on_fn_other()  : une autre touche pressée pendant que fn est maintenu
@@ -159,10 +164,11 @@ class FnListener:
 
             if etype == Quartz.kCGEventFlagsChanged:
                 if keycode == FN_KEYCODE:
-                    down = bool(Quartz.CGEventGetFlags(event) & FLAG_FN)
+                    flags = Quartz.CGEventGetFlags(event)
+                    down = bool(flags & FLAG_FN)
                     if down and not self._pressed:
                         self._pressed = True
-                        self.on_down()
+                        self.on_down(bool(flags & FLAG_SHIFT))
                     elif not down and self._pressed:
                         self._pressed = False
                         self.on_up()
