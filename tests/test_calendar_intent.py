@@ -14,7 +14,8 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from localflow.calendar_intent import (
-    build_event, clean_title, extract_json, humanize, resolve_day, resolve_when,
+    build_event, clean_title, extract_json, find_day, humanize, mentions_time,
+    resolve_day, resolve_when,
 )
 
 TZ = ZoneInfo("Europe/Paris")
@@ -171,6 +172,59 @@ class ConstruitLEvenement(unittest.TestCase):
     def test_pas_un_dict(self):
         for cas in (None, "demain 14h", [], 42):
             self.assertIsNone(build_event(cas, self.NOW), msg=repr(cas))
+
+
+class GardeFousSurLaPhrase(unittest.TestCase):
+    """Ce que le modèle a raté en vrai, et qui ne doit plus passer.
+
+    Les deux cas viennent d'un essai réel sur Qwen3-1.7B (9 sept. 2026) :
+    « bonjour comment ça va » créait un événement pour aujourd'hui, et
+    « demain matin à 9h » était compris comme aujourd'hui.
+    """
+
+    NOW = datetime.datetime(2026, 9, 9, 18, 46, tzinfo=TZ)   # mercredi
+
+    def test_une_phrase_sans_moment_ne_cree_rien(self):
+        for phrase in ("bonjour comment ça va", "il faut que je refasse le site",
+                       "note bien ce que je te dis", ""):
+            self.assertFalse(mentions_time(phrase), msg=phrase)
+
+    def test_les_vrais_reperes_passent(self):
+        for phrase in ("déjeuner demain", "rendu vendredi", "à 14h", "à 14 heures",
+                       "le 18/09", "réunion ce soir", "point lundi prochain",
+                       "rendez-vous le 2026-09-18", "en septembre", "à midi"):
+            self.assertTrue(mentions_time(phrase), msg=phrase)
+
+    def test_bonjour_ne_devient_pas_un_evenement(self):
+        """Même si le modèle affirme « aujourd'hui », la phrase ne le dit pas."""
+        invente = {"titre": "Bonjour comment ça va", "jour": "aujourd'hui",
+                   "heure": None, "duree_min": 60, "journee_entiere": True}
+        self.assertIsNone(build_event(invente, self.NOW, texte="bonjour comment ça va"))
+
+    def test_la_phrase_a_le_dernier_mot_sur_le_jour(self):
+        """« demain matin » : le modèle disait aujourd'hui, la phrase dit demain."""
+        faux = {"titre": "Appeler César", "jour": "aujourd'hui", "heure": "09:00",
+                "duree_min": 60, "journee_entiere": False}
+        ev = build_event(faux, self.NOW, texte="rappelle-moi d'appeler César demain matin à 9h")
+        self.assertEqual(ev["_libelle"], "Demain 09:00")
+
+    def test_lecture_du_jour_dans_la_phrase(self):
+        CAS = [
+            ("appeler César demain matin", "demain"),
+            ("le rendu après-demain", "après-demain"),
+            ("on se voit aujourd'hui", "aujourd'hui"),
+            ("réunion ce soir", "aujourd'hui"),
+            ("point jeudi à 15h", "jeudi"),
+            ("rendez-vous le 2026-09-18", "2026-09-18"),
+            ("à 14h", None),                 # une heure sans jour : au modèle de trancher
+            ("bonjour", None),
+        ]
+        for phrase, attendu in CAS:
+            self.assertEqual(find_day(phrase), attendu, msg=phrase)
+
+    def test_apres_demain_avant_demain(self):
+        """« après-demain » contient « demain » : l'ordre de lecture compte."""
+        self.assertEqual(find_day("le rendu après-demain"), "après-demain")
 
 
 class Libelle(unittest.TestCase):

@@ -110,6 +110,59 @@ def extract_json(output: str):
     return None   # accolade jamais refermée : génération coupée
 
 
+def _sans_accents(texte):
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFD", texte.lower())
+                   if unicodedata.category(c) != "Mn")
+
+
+# Repères temporels admis dans la phrase. Sans l'un d'eux, aucun événement ne
+# part — quoi qu'en dise le modèle.
+_MARQUEURS = re.compile(
+    r"\b(aujourd'?hui|demain|apres-?demain|surlendemain|ce soir|ce matin|"
+    r"cet? (?:apres-midi|midi)|midi|minuit|"
+    r"lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche|"
+    r"semaine|mois|janvier|fevrier|mars|avril|mai|juin|juillet|aout|septembre|"
+    r"octobre|novembre|decembre|"
+    r"\d{1,2}\s*[h:]\s*\d{0,2}|\d{1,2}\s*heures?|\d{1,2}/\d{1,2}|\d{4}-\d{2}-\d{2})\b"
+)
+
+
+def mentions_time(texte):
+    """La phrase parle-t-elle vraiment d'un moment ?
+
+    Garde-fou du même esprit que celui du nettoyage, qui interdit au LLM
+    d'inventer des mots : ici on lui interdit d'inventer une date. « Bonjour
+    comment ça va » lui faisait produire un événement pour aujourd'hui — sans
+    ce contrôle, une phrase dictée par erreur atterrit dans l'agenda.
+    """
+    return bool(_MARQUEURS.search(_sans_accents(texte or "")))
+
+
+def find_day(texte):
+    """Le jour lu DANS la phrase, prioritaire sur celui du modèle.
+
+    Mesuré : sur « rappelle-moi d'appeler César demain matin à 9h », Qwen3-1.7B
+    répond « aujourd'hui ». Il lit bien l'heure et le titre, mais pas le jour ;
+    on ne le lui demande donc plus quand la phrase le dit noir sur blanc.
+    Renvoie un descripteur que resolve_day() sait lire, ou None.
+    """
+    t = _sans_accents(texte or "")
+    if re.search(r"\b(apres-?demain|surlendemain)\b", t):
+        return "après-demain"
+    if re.search(r"\bdemain\b", t):
+        return "demain"
+    if re.search(r"\b(aujourd'?hui|ce soir|ce matin|cet? apres-midi|ce midi|tout a l'heure)\b", t):
+        return "aujourd'hui"
+    m = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", t)
+    if m:
+        return m.group(1)
+    for nom in JOURS:
+        if re.search(r"\b" + _sans_accents(nom) + r"\b", t):
+            return nom
+    return None
+
+
 def _parse_heure(heure):
     """« 14:00 », « 14h30 », « 9 h » → (h, m). None si illisible."""
     if heure is None:
@@ -218,17 +271,22 @@ def clean_title(titre):
     return t[0].upper() + t[1:] if t else None
 
 
-def build_event(brut, now):
-    """dict du LLM + instant présent → événement prêt pour TimeTree, ou None.
+def build_event(brut, now, texte=""):
+    """dict du LLM + phrase d'origine + instant présent → événement, ou None.
 
     Pure : c'est ici que se jouent tous les garde-fous, et c'est ce qu'on teste.
+    `texte` est la phrase dictée ; quand elle est fournie, elle fait autorité
+    sur le modèle pour tout ce qu'elle dit explicitement.
     """
     if not isinstance(brut, dict):
         return None
+    if texte and not mentions_time(texte):
+        return None            # aucun repère temporel : le modèle a inventé
     titre = clean_title(brut.get("titre") or brut.get("title"))
     if not titre:
         return None
-    quand = resolve_when(brut.get("jour"), brut.get("heure"),
+    jour = find_day(texte) or brut.get("jour")
+    quand = resolve_when(jour, brut.get("heure"),
                          brut.get("duree_min", DUREE_DEFAUT_MIN),
                          brut.get("journee_entiere", False), now)
     if quand is None:
@@ -304,6 +362,6 @@ class CalendarIntent:
 
             sortie = generate(model, tokenizer, prompt=prompt,
                               max_tokens=220, verbose=False).strip()
-            return build_event(extract_json(sortie), now)
+            return build_event(extract_json(sortie), now, texte=text)
         except Exception:
             return None
