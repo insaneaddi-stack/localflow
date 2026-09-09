@@ -1,4 +1,4 @@
-"""Fenêtre Historique — même langage que le panneau : noir profond, cartes à aura,
+"""Fenêtre Historique — même langage que le panneau : crème, cartes à filet,
 survol, clic = copier, recherche, stats. Dessin custom (pas de NSTableView)."""
 
 import datetime
@@ -154,7 +154,7 @@ class _ListView(NSView):
             _draw_text(label, NSMakeRect(rect.origin.x + 40, rect.origin.y + 10, 260, 14), _attrs(10.5, 0.5, weight=0.5))
             # Un clic copie la ligne, mais rien ne le disait avant d'avoir essayé :
             # au survol, l'heure cède la place à l'action.
-            right = "Copié ✓" if copied else ("Copier" if hovered else _fmt_time(e.get("t", "")))
+            right = "Copié" if copied else ("Copier" if hovered else _fmt_time(e.get("t", "")))
             ra = _attrs(10.5, 0.95 if copied else (0.75 if hovered else 0.4), weight=0.5)
             if copied:
                 ra = dict(ra); ra[NSForegroundColorAttributeName] = c(0.95)
@@ -164,7 +164,7 @@ class _ListView(NSView):
                        NSMakeRect(rect.origin.x + 40, rect.origin.y + 28, rect.size.width - 60, 18), _attrs(13, 0.93))
 
 class _StatsView(NSView):
-    """Semaine : barres de mots/jour (dégradé violet), apps les plus dictées, temps gagné."""
+    """Semaine : barres de mots/jour (le jour courant en orange), apps les plus dictées, temps gagné."""
 
     def initWithFrame_(self, frame):
         self = objc.super(_StatsView, self).initWithFrame_(frame)
@@ -180,7 +180,7 @@ class _StatsView(NSView):
         w = b.size.width
         left_w = w * 0.58
         # carte de fond
-        card = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(M, 8, w - 2 * M, b.size.height - 16), 16, 16)
+        card = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(M, 8, w - 2 * M, b.size.height - 16), theme.RAYON_CARTE, theme.RAYON_CARTE)
         theme.ns(theme.FOND_PUR).setFill(); card.fill()
         _encre(0.07).setStroke(); card.setLineWidth_(1.0); card.stroke()
 

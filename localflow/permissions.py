@@ -123,7 +123,7 @@ class _PermRow(NSView):
 
     def drawRect_(self, r):
         b = self.bounds()
-        path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(0.5, 0.5, b.size.width - 1, b.size.height - 1), 16, 16)
+        path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(0.5, 0.5, b.size.width - 1, b.size.height - 1), theme.RAYON_CARTE, theme.RAYON_CARTE)
         theme.ns(theme.FOND_PUR).setFill(); path.fill()
         col = GREEN if self.ok else (AMBER if self.pending else REDC)
         c = lambda a: NSColor.colorWithCalibratedRed_green_blue_alpha_(col[0], col[1], col[2], a)
@@ -132,7 +132,7 @@ class _PermRow(NSView):
         c(0.25).setFill(); NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(18, b.size.height / 2 - 11, 22, 22)).fill()
         c(0.95).setFill(); NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(23, b.size.height / 2 - 6, 12, 12)).fill()
         _draw_text(self.spec.get("title", ""), NSMakeRect(56, b.size.height - 34, 300, 20), _attrs(15, 0.96, weight=0.6))
-        state = "Accordée ✓" if self.ok else ("En attente…" if self.pending else "À accorder")
+        state = "Accordée" if self.ok else ("En attente…" if self.pending else "À accorder")
         sa = dict(_attrs(11, 0.9, weight=0.5)); sa[NSForegroundColorAttributeName] = c(0.95)
         _draw_text(state, NSMakeRect(56 + 130, b.size.height - 32, 160, 16), sa)
         _draw_text(self.spec.get("why", ""), NSMakeRect(56, b.size.height - 54, b.size.width - 200, 16), _attrs(12, 0.75))

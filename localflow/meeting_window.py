@@ -1,4 +1,4 @@
-"""Fenêtres du module Réunions — même langage que l'Historique (noir profond, cartes à aura).
+"""Fenêtres du module Réunions — même langage que l'Historique (crème, cartes à filet).
 
 - LiveMeetingWindow : réunion en cours. Gauche : transcript live (Moi / Eux). Droite : bloc-notes
   (sauvegardé en continu). Bas : état + « Terminer & résumer ».
@@ -94,7 +94,7 @@ def _textview(frame, editable, font_size=13.0):
     tv.setSelectable_(True)
     tv.setRichText_(False)
     tv.setDrawsBackground_(False)
-    tv.setFont_(NSFont.systemFontOfSize_(font_size))
+    tv.setFont_(theme.font(font_size))
     tv.setTextColor_(_encre(0.92))
     tv.setInsertionPointColor_(_encre(0.9))
     tv.setTextContainerInset_((10, 10))
@@ -129,7 +129,7 @@ class _MeetCard(NSView):
 
     def drawRect_(self, r):
         b = self.bounds()
-        path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(0.5, 0.5, b.size.width - 1, b.size.height - 1), 16, 16)
+        path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(0.5, 0.5, b.size.width - 1, b.size.height - 1), theme.RAYON_CARTE, theme.RAYON_CARTE)
         theme.ns(theme.FOND_PUR).setFill(); path.fill()
         _encre(0.08).setStroke(); path.setLineWidth_(1.0); path.stroke()
         if self.title:
@@ -301,7 +301,7 @@ class LiveMeetingWindow(NSObject):
             who = "Moi" if s["who"] == "me" else "Eux"
             col = _rgb(ME_COLOR if s["who"] == "me" else THEM_COLOR, 0.95)
             out.appendAttributedString_(NSAttributedString.alloc().initWithString_attributes_(
-                f"{_fmt_ts(s['t0'])}  ", {NSFontAttributeName: NSFont.monospacedDigitSystemFontOfSize_weight_(11, 0.3), NSForegroundColorAttributeName: _encre(0.35)}))
+                f"{_fmt_ts(s['t0'])}  ", {NSFontAttributeName: theme.font(11, 500), NSForegroundColorAttributeName: _encre(0.35)}))
             out.appendAttributedString_(NSAttributedString.alloc().initWithString_attributes_(
                 who + "\n", {NSFontAttributeName: theme.font(12, 600), NSForegroundColorAttributeName: col}))
             out.appendAttributedString_(NSAttributedString.alloc().initWithString_attributes_(
@@ -411,7 +411,7 @@ class _MeetingList(NSView):
             rect = NSMakeRect(8, y + 4, w - 16, ROW_H - 8)
             hovered = self.hover_pt is not None and NSPointInRect(self.hover_pt, rect)
             sel = i == self.selected
-            path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(rect, 14, 14)
+            path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(rect, theme.RAYON_CARTE, theme.RAYON_CARTE)
             theme.ns(theme.CREME if sel else (theme.CARTE if hovered else theme.FOND_PUR)).setFill(); path.fill()
             (_rgb(ME_COLOR, 0.8) if sel else _encre(0.12 if hovered else 0.07)).setStroke(); path.setLineWidth_(1.0); path.stroke()
             _rgb(ME_COLOR, 0.95 if sel else 0.6).setFill()

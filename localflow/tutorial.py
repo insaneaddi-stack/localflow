@@ -1,7 +1,7 @@
 """Tutoriel de première installation, directement à l'écran (pas dans le terminal).
 
-Une carte sombre (même langage que le panneau) posée au-dessus de la barre du bas,
-avec l'orbe qui présente et une flèche animée qui pointe vers la barre. Les étapes
+Une carte du système (crème, filet, ombre chaude) posée au-dessus de la barre du
+bas, le monogramme qui présente et une flèche animée vers la barre. Les étapes
 avancent quand l'utilisateur FAIT la chose (première dictée, mains-libres, panneau),
 Esc passe une étape. Tout est transparent à la souris : rien à cliquer.
 """
@@ -13,7 +13,6 @@ import objc
 from AppKit import (
     NSBackingStoreBuffered,
     NSCursor,
-    NSEvent,
     NSTrackingActiveAlways,
     NSTrackingArea,
     NSTrackingInVisibleRect,
@@ -68,43 +67,15 @@ STEPS = [
         "title": "Réunions",
         "lines": ["Quand un appel démarre (Zoom, Meet, Teams…), AUR'IAFLOW propose de l'enregistrer :",
                   "micro + son de l'appel, transcript en direct, compte rendu en Markdown. Tout reste sur ton Mac."],
-        "hint": "Aussi dans le panneau (bulle Réunion) et le menu 🎙", "wait": "key", "arrow": True,
+        "hint": "Aussi dans le panneau (tuile Réunion) et le menu de la barre", "wait": "key", "arrow": True,
     },
     {   # 5 — fin
         "title": "C'est tout.",
-        "lines": ["Dictionnaire, moteur et réglages : icône 🎙 dans la barre des menus.",
+        "lines": ["Dictionnaire, moteur et réglages : le A dans la barre des menus.",
                   "Dis « corrige X en Y » pour lui apprendre un mot. Bonne dictée."],
         "hint": "Se ferme tout seul", "wait": "timer:6", "arrow": False,
     },
 ]
-
-class _OrbState:
-    """État minimal pour réutiliser le dessin de l'orbe du panneau."""
-    def __init__(self):
-        self.phase = 0.0
-        self.gaze = (0.0, -0.4)
-        self._blink_t0 = None
-        self._next_blink = time.time() + 2.0
-
-    def blink_amount(self):
-        if self._blink_t0 is None:
-            return 0.0
-        t = (time.time() - self._blink_t0) / 0.14
-        return 0.0 if t >= 1.0 else math.sin(t * math.pi)
-
-    def look_at(self, dx, dy):
-        dist = math.hypot(dx, dy) or 1.0
-        norm = min(1.0, dist / 260.0)
-        tx, ty = dx / dist * norm, dy / dist * norm
-        self.gaze = (self.gaze[0] + (tx - self.gaze[0]) * 0.25, self.gaze[1] + (ty - self.gaze[1]) * 0.25)
-
-    def tick(self, now):
-        self.phase = now
-        if now >= self._next_blink:
-            self._blink_t0 = now
-            self._next_blink = now + 2.5 + (now * 7.3) % 3.5
-        elif self._blink_t0 is not None and now - self._blink_t0 > 0.2:
-            self._blink_t0 = None
 
 class _TutorialView(NSView):
     def initWithFrame_(self, frame):
@@ -112,7 +83,6 @@ class _TutorialView(NSView):
         if self is None:
             return None
         self.tut = None
-        self.overlay = None   # pour _BandView._draw_orb (lit self.overlay.gaze / phase / blink_amount)
         return self
 
     def drawRect_(self, dirty):
@@ -125,28 +95,33 @@ class _TutorialView(NSView):
         # --- carte
         cx = b.size.width / 2.0
         card = NSMakeRect(cx - CARD_W / 2, t.card_y, CARD_W, CARD_H)
-        path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(card, 22, 22)
-        for dy, grow, a in ((-4, 12, 0.10), (-2, 6, 0.14)):   # ombre douce
-            theme.ns(theme.ENCRE, a * k * 0.55).setFill()
-            NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
-                NSMakeRect(card.origin.x - grow, card.origin.y - grow + dy, CARD_W + 2 * grow, CARD_H + 2 * grow), 22 + grow, 22 + grow).fill()
-        theme.ns(theme.FOND, 0.99 * k).setFill()
+        path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+            card, theme.RAYON_CARTE, theme.RAYON_CARTE)
+        # L'élévation du système : l'ombre brune chaude, l'anneau d'un pixel, le filet.
+        from AppKit import NSGraphicsContext, NSShadow
+        ctx = NSGraphicsContext.currentContext()
+        if ctx is not None:
+            ctx.saveGraphicsState()
+            sh = NSShadow.alloc().init()
+            sh.setShadowOffset_((0.0, theme.OMBRE["dy"]))
+            sh.setShadowBlurRadius_(theme.OMBRE["flou"])
+            sh.setShadowColor_(theme.ns(theme.OMBRE["couleur"], theme.OMBRE["alpha"] * k))
+            sh.set()
+        theme.ns(theme.FOND, k).setFill()
         path.fill()
-        _encre(0.14 * k).setStroke(); path.setLineWidth_(1.0); path.stroke()
-        # aura violette discrète en bas de la carte
-        from AppKit import NSGraphicsContext, NSGradient, NSColorSpace
-        ctx = NSGraphicsContext.currentContext(); ctx.saveGraphicsState(); path.addClip()
-        r_, g_, b_ = _BandView.AURAS["default"]
-        c = lambda a: NSColor.colorWithCalibratedRed_green_blue_alpha_(r_, g_, b_, a * k)
-        NSGradient.alloc().initWithColors_atLocations_colorSpace_([c(0.28), c(0.08), c(0.0)], [0.0, 0.5, 1.0], NSColorSpace.sRGBColorSpace()) \
-            .drawInRect_angle_(NSMakeRect(card.origin.x, card.origin.y, CARD_W, CARD_H * 0.6), 90.0)
-        ctx.restoreGraphicsState()
-        # --- orbe (à gauche), textes
-        orb_d = 40.0
-        ox, oy = card.origin.x + 38, card.origin.y + CARD_H - 46
-        _BandView._draw_orb(self, ox, oy, orb_d, k)
+        if ctx is not None:
+            ctx.restoreGraphicsState()
+        theme.ns(theme.OMBRE_ANNEAU["couleur"], theme.OMBRE_ANNEAU["alpha"] * k).setStroke()
+        path.setLineWidth_(theme.FILET * 2); path.stroke()
+        theme.ns(theme.TRAIT, k).setStroke()
+        path.setLineWidth_(theme.FILET); path.stroke()
+        # --- le monogramme (à gauche), textes
+        d = 34.0
+        _BandView._draw_mono(self, theme.image(theme.MONOGRAMME),
+                             card.origin.x + 38 - d / 2, card.origin.y + CARD_H - 46 - d / 2, d, k)
         tx = card.origin.x + 76
-        _draw_text(step["title"], NSMakeRect(tx, card.origin.y + CARD_H - 44, CARD_W - 96, 22), _attrs(17, 0.96, serif=True, * k, weight=0.6))
+        _draw_text(step["title"], NSMakeRect(tx, card.origin.y + CARD_H - 44, CARD_W - 96, 22),
+                   _attrs(17, 0.96 * k, weight=600, serif=True))
         y = card.origin.y + CARD_H - 70
         for line in step["lines"]:
             _draw_text(line, NSMakeRect(tx, y, CARD_W - 96, 17), _attrs(12.5, 0.85 * k))
@@ -211,10 +186,10 @@ class _ButtonView(NSView):
     def drawRect_(self, dirty):
         b = self.bounds()
         k = self.tut.alpha if self.tut else 1.0
-        path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(0.5, 0.5, b.size.width - 1, b.size.height - 1), BTN_H / 2, BTN_H / 2)
-        _orange((0.40 if self.hover else 0.28) * k).setFill(); path.fill()
-        _orange(0.9 * k).setStroke(); path.setLineWidth_(1.0); path.stroke()
-        a = _attrs(12, 0.96 * k, weight=0.5)
+        path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+            NSMakeRect(0.5, 0.5, b.size.width - 1, b.size.height - 1), theme.RAYON_BOUTON, theme.RAYON_BOUTON)
+        theme.ns(theme.O_PETIT if self.hover else theme.O_BOUTON, k).setFill(); path.fill()
+        a = _attrs(12, k, weight=600, color=theme.ns(theme.BLANC, 0.96 * k))
         w = _text_width(self.label, a)
         _draw_text(self.label, NSMakeRect(b.size.width / 2 - w / 2, b.size.height / 2 - 8, w + 2, 16), a)
 
@@ -231,7 +206,6 @@ class Tutorial:
         self._timer = None
         self._step_t0 = 0.0
         self._t0 = time.time()
-        self.orb = _OrbState()
         self.panel = None
         self.view = None
 
@@ -249,7 +223,6 @@ class Tutorial:
         self.panel.setCollectionBehavior_(NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorStationary)
         self.view = _TutorialView.alloc().initWithFrame_(NSMakeRect(0, 0, vf.size.width, vf.size.height))
         self.view.tut = self
-        self.view.overlay = self.orb
         self.panel.setContentView_(self.view)
         # géométrie : la barre réduite est à MARGINS['idle'] du bas de l'écran visible
         self.target_y = MARGINS["idle"] + IDLE_H          # haut de la barre, en coordonnées fenêtre (origine = bas du visibleFrame)
@@ -316,16 +289,7 @@ class Tutorial:
     def _tick(self, timer):
         now = time.time()
         self.phase = now - self._t0
-        self.orb.tick(self.phase)
         self.alpha = min(1.0, self.alpha + 1.0 / (FPS * 0.28))
-        # les yeux suivent la souris (position écran → position de l'orbe)
-        try:
-            loc = NSEvent.mouseLocation()
-            ox = self._vf.origin.x + self._vf.size.width / 2.0 - CARD_W / 2 + 38
-            oy = self._vf.origin.y + self.card_y + CARD_H - 46
-            self.orb.look_at(loc.x - ox, loc.y - oy)
-        except Exception:
-            pass
         step = STEPS[self.index]
         label = "Terminer" if self.index == len(STEPS) - 1 else ("Passer" if step["wait"] in ("dictated",) else "Suivant")
         if self.btn.label != label:

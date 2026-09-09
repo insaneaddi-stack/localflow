@@ -339,13 +339,13 @@ class LocalFlowApp(rumps.App):
                 if sha:
                     first = self._update_sha != sha
                     self._update_sha = sha
-                    self.item_update.title = "⬆️ Mise à jour disponible — installer…"
+                    self.item_update.title = "Mise à jour disponible — installer…"
                     if first:
                         _log(f"mise à jour disponible : {sha[:7]}")
                         if self.config.auto_update and not update.IS_DEV:
                             self._auto_update_when_idle()
                         else:
-                            _notify("Mise à jour disponible", "Menu 🎙 → Mise à jour disponible — installer…")
+                            _notify("Mise à jour disponible", "Dans le menu de la barre : « Mise à jour disponible — installer… ».")
                 else:
                     self._update_sha = None
                     self.item_update.title = "Vérifier les mises à jour"
@@ -495,7 +495,7 @@ class LocalFlowApp(rumps.App):
                 if not notified:
                     _notify("Modèle indisponible", f"AUR'IAFLOW réessaie en boucle — {exc}")
                     notified = True
-                _on_main(lambda d=delay: setattr(self.item_status, "title", f"⚠️ Modèle : nouvel essai dans {d}s"))
+                _on_main(lambda d=delay: setattr(self.item_status, "title", f"Modèle indisponible — nouvel essai dans {d} s"))
                 time.sleep(delay)
                 delay = min(delay * 2, 60)
 
@@ -633,7 +633,7 @@ class LocalFlowApp(rumps.App):
         if self.hands_free or not self.recorder.recording:
             return
         self.hands_free = True
-        self.overlay.rec_hands_free = True   # le chrono passe en violet : ça continue sans toi
+        self.overlay.rec_hands_free = True   # le fil se coud sous l'onde : ça continue sans toi
         self._suppress_next_release = True
         self._cancel_start_sound_timer()
         self._play(SOUND_START)
@@ -687,7 +687,7 @@ class LocalFlowApp(rumps.App):
             if time.time() - getattr(self, "_tap_log_t", 0) > 60:  # pas de spam : 1 ligne / min
                 self._tap_log_t = time.time()
                 _log(f"event tap indisponible: {exc}")
-            self.item_status.title = "⚠️ Autorisation Accessibilité manquante"
+            self.item_status.title = "Accessibilité manquante — à accorder"
             if not getattr(self, "_perm_prompted", False):  # une seule fois, pas toutes les 2 s
                 self._perm_prompted = True
                 # Fenêtre guidée : témoins en direct + bouton qui déclenche la demande officielle de macOS
@@ -1138,18 +1138,17 @@ class LocalFlowApp(rumps.App):
             "status": "Prêt · Qwen3-ASR" if self.transcriber is not None else "Chargement…",
             "icon": ICON_PATH,
             "tiles": [
-                {"title": "Historique", "subtitle": f"{t['dictations']} dictées aujourd'hui", "color": (0.55, 0.40, 1.00),
+                {"title": "Historique", "subtitle": f"{t['dictations']} dictées aujourd'hui",
                  "icon": "clock.arrow.circlepath", "on": True, "action": "history"},
                 {"title": "Nettoyage IA", "subtitle": "Activé · +0,8 s" if self.config.cleanup_enabled else "Désactivé · instantané",
-                 "color": (0.35, 0.95, 0.55), "icon": "wand.and.sparkles",
+                 "icon": "wand.and.sparkles",
                  "on": self.config.cleanup_enabled, "action": "toggle", "payload": "cleanup_enabled"},
                 {"title": "Réunion", "subtitle": (f"■ Arrêter · {_fmt_ts(self.meeting_rec.meeting.duration_s)}" if self.meeting_rec.active
                                                   else ("Résumé en cours…" if self._meeting_busy else "Micro + son système")),
-                 "color": (1.00, 0.30, 0.32) if self.meeting_rec.active else (1.00, 0.62, 0.30),
                  "icon": "stop.circle" if self.meeting_rec.active else "person.wave.2",
                  "on": self.meeting_rec.active, "action": "meeting_toggle"},
                 {"title": "Copier", "subtitle": (last[:34] + "…" if len(last) > 34 else last) if last else "Aucune dictée",
-                 "color": (0.35, 0.70, 1.00), "icon": "doc.on.doc", "on": bool(last), "action": "copy_last"},
+                 "icon": "doc.on.doc", "on": bool(last), "action": "copy_last"},
             ],
             "stats_line": f"Aujourd'hui · {t['words']} mots · {t['dictations']} dictées · ≈ {t['saved_min']:.0f} min gagnées",
             "toggles": [

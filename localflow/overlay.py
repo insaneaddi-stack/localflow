@@ -2,8 +2,8 @@
 
 - idle      : petite barre sombre (l'app est allumée), survol = s'éclaire
 - expanded  : panneau « bulles » (historique cliquable, stats, réglages, actions)
-- recording : pilule avec halo violet + barres blanches qui suivent la voix
-- processing: pilule élargie, halo rapide, barre de progression 0→100 %
+- recording : carte crème, forme d'onde à l'encre, le fil orange en mains-libres
+- processing: carte de même largeur, barre de progression 0→100 %
 
 Transitions interpolées à 60 fps (ressort amorti), ombre portée douce.
 À utiliser uniquement depuis le thread principal.
@@ -23,7 +23,6 @@ from AppKit import (
     NSEvent,
     NSEventMaskLeftMouseDown,
     NSEventMaskRightMouseDown,
-    NSFont,
     NSGradient,
     NSImage,
     NSImageSymbolConfiguration,
@@ -55,7 +54,7 @@ from AppKit import (
 from . import theme
 
 # ---- géométrie (tailles du contenu, hors marge d'ombre) ----
-PAD = 26.0                      # marge autour pour l'ombre et le halo
+PAD = 26.0                      # marge autour pour l'ombre
 IDLE_W, IDLE_H = 76.0, 8.0
 HOVER_W, HOVER_H = 168.0, 26.0  # au survol on affiche vraiment quoi faire, d'où la place
 PILL_W, PILL_H = 184.0, 36.0
@@ -749,92 +748,27 @@ class _BandView(NSView):
                    _attrs(10, ka, weight=600, color=theme.ns(theme.ENCRE_3, 0.7 * ka)))
 
     @objc.python_method
-    def _draw_orb(self, cx, cy, d, k):
-        """Petit personnage : orbe de verre sombre, liseré violet→turquoise, deux yeux
-        qui suivent la souris et clignent, quelques particules."""
-        from AppKit import NSGraphicsContext
-        ov = self.overlay
-        rr = d / 2.0
-        # halo
-        for grow, a in ((10, 0.06), (5, 0.12)):
-            _orange(a * k).setFill()
-            NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(cx - rr - grow, cy - rr - grow, d + 2 * grow, d + 2 * grow)).fill()
-        # corps : dégradé radial sombre
-        body = NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(cx - rr, cy - rr, d, d))
-        grad = NSGradient.alloc().initWithColors_([
-            NSColor.colorWithCalibratedRed_green_blue_alpha_(0.16, 0.14, 0.24, 1.0 * k),
-            NSColor.colorWithCalibratedRed_green_blue_alpha_(0.05, 0.05, 0.09, 1.0 * k),
-        ])
-        grad.drawInBezierPath_relativeCenterPosition_(body, (-0.3, 0.35))
-        # liseré coloré : segments violet → turquoise → rose
-        segs = 48
-        for i in range(segs):
-            t = i / segs
-            hue = 0.72 + 0.22 * math.sin(2 * math.pi * (t + ov.phase * 0.05))  # 0.5 (turquoise) ↔ 0.94 (rose)
-            a = 0.35 + 0.55 * (0.5 + 0.5 * math.sin(2 * math.pi * (t * 2 + ov.phase * 0.15)))
-            col = NSColor.colorWithCalibratedHue_saturation_brightness_alpha_(hue % 1.0, 0.75, 1.0, a * k)
-            col.setStroke()
-            p = NSBezierPath.bezierPath()
-            p.setLineWidth_(1.6)
-            p.appendBezierPathWithArcWithCenter_radius_startAngle_endAngle_((cx, cy), rr - 0.8, t * 360 - 1, t * 360 + 360 / segs + 1)
-            p.stroke()
-        # reflet
-        NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.10 * k).setFill()
-        NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(cx - rr * 0.55, cy + rr * 0.15, rr * 0.9, rr * 0.45)).fill()
-        # yeux : suivent la souris
-        dx, dy = ov.gaze
-        blink = ov.blink_amount()  # 0 ouvert → 1 fermé
-        eye_h = max(1.5, (d * 0.30) * (1 - blink))
-        eye_w = d * 0.10
-        gap = d * 0.16
-        ex = cx + dx * d * 0.12
-        ey = cy + dy * d * 0.10 - d * 0.02
-        NSColor.colorWithCalibratedWhite_alpha_(0.97, 0.97 * k).setFill()
-        for sx in (-1, 1):
-            rx = ex + sx * gap - eye_w / 2
-            NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(rx, ey - eye_h / 2, eye_w, eye_h), eye_w / 2, eye_w / 2).fill()
-        # particules
-        for i, (px_, py_, s_) in enumerate(((1.35, 0.9, 2.0), (-1.25, -0.7, 1.5), (0.9, -1.3, 1.2))):
-            tw = 0.5 + 0.5 * math.sin(ov.phase * 1.3 + i * 2.1)
-            _encre((0.25 + 0.55 * tw) * k).setFill()
-            NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(cx + px_ * rr - s_ / 2, cy + py_ * rr - s_ / 2, s_, s_)).fill()
-
-    @objc.python_method
     def _draw_tile(self, rect, tile, idx, ka, hovered):
-        """Tuile lumineuse : aura colorée (éteinte si réglage off), gros libellé, état."""
-        from AppKit import NSGraphicsContext
-        r, g, b = tile["color"]
+        """Tuile du système : une carte à filet, l'icône et le libellé à l'encre.
+
+        Il y avait ici une aura par tuile — violet, vert, rouge, bleu — un
+        dégradé lumineux et un grain. Le système n'a aucune de ces couleurs et
+        exclut la lueur. L'état se lit à l'encre : pleine quand c'est actif,
+        éteinte sinon. L'orange ne vient que sur ce qui vient d'être fait.
+        """
         on = tile.get("on", True)
-        path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(rect, 22, 22)
-        NSColor.colorWithCalibratedWhite_alpha_(0.055 if not hovered else 0.08, ka).setFill()
+        ov = self.overlay
+        copied = ov.flash_index == idx and time.time() - ov.flash_t0 < 1.2
+        path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+            rect, theme.RAYON_CARTE, theme.RAYON_CARTE)
+        theme.ns(theme.CARTE if hovered else theme.FOND_PUR, ka).setFill()
         path.fill()
-        ctx = NSGraphicsContext.currentContext()
-        ctx.saveGraphicsState()
-        path.addClip()
-        strength = (0.9 if on else 0.18) * (1.1 if hovered else 1.0) * ka
-        c = lambda a: NSColor.colorWithCalibratedRed_green_blue_alpha_(r, g, b, a)
-        w, h = rect.size.width, rect.size.height
-        glow = NSGradient.alloc().initWithColors_atLocations_colorSpace_(
-            [c(0.95 * strength), c(0.55 * strength), c(0.25 * strength), c(0.10 * strength), c(0.03 * strength), c(0.0)],
-            [0.0, 0.18, 0.38, 0.6, 0.82, 1.0], NSColorSpace.sRGBColorSpace())
-        glow.drawInRect_relativeCenterPosition_(NSMakeRect(rect.origin.x - w * 0.2, rect.origin.y - h * 1.0, w * 1.4, h * 2.0), (0.0, 0.0))
-        band = NSGradient.alloc().initWithColors_atLocations_colorSpace_(
-            [c(0.40 * strength), c(0.15 * strength), c(0.04 * strength), c(0.0)], [0.0, 0.35, 0.7, 1.0], NSColorSpace.sRGBColorSpace())
-        band.drawInRect_angle_(NSMakeRect(rect.origin.x, rect.origin.y, w, h * 0.75), 90.0)
-        NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.05 * ka).setFill()
-        seed = int(rect.origin.x * 7 + idx * 131)
-        for n in range(36):
-            gx = rect.origin.x + ((seed * 31 + n * 97) % int(w))
-            gy = rect.origin.y + ((seed * 17 + n * 53) % int(h * 0.6))
-            NSBezierPath.fillRect_(NSMakeRect(gx, gy, 1, 1))
-        ctx.restoreGraphicsState()
-        NSColor.colorWithCalibratedWhite_alpha_(1.0, (0.10 if not hovered else 0.20) * ka).setStroke()
-        path.setLineWidth_(1.0)
+        theme.ns(theme.O_PETIT if copied else (theme.TRAIT_FORT if hovered else theme.TRAIT), ka).setStroke()
+        path.setLineWidth_(theme.FILET * (2.0 if copied else 1.0))
         path.stroke()
-        # Icône, centrée dans la moitié haute. Elle remplit le grand vide qu'il y avait
-        # là et rend les tuiles reconnaissables d'un coup d'œil : avant, les quatre ne
-        # se distinguaient que par leur teinte. Elle porte aussi l'état (allumé/éteint),
-        # ce qui rend l'ancienne pastille-témoin redondante.
+        w, h = rect.size.width, rect.size.height
+        # Icône, centrée dans la moitié haute : c'est elle qui rend les tuiles
+        # reconnaissables d'un coup d'œil, et elle porte l'état (allumé/éteint).
         icon = tile.get("icon")
         if icon:
             img = self._symbol(icon, 30, 1.0)
@@ -845,17 +779,14 @@ class _BandView(NSView):
                                   rect.origin.y + h * 0.55 - sz.height / 2.0,
                                   30, (0.95 if on else 0.30) * ka)
         # numéro
-        na = _attrs(10.5, 0.42 * ka, weight=0.5)
-        _draw_text(str(idx + 1), NSMakeRect(rect.origin.x + w - 26, rect.origin.y + h - 30, 12, 12), na)
+        _draw_text(str(idx + 1), NSMakeRect(rect.origin.x + w - 26, rect.origin.y + h - 30, 12, 12),
+                   _attrs(10.5, ka, weight=600, color=theme.ns(theme.ENCRE_3, 0.7 * ka)))
         # libellé + état
-        _draw_text(tile["title"].upper(), NSMakeRect(rect.origin.x + 18, rect.origin.y + 40, w - 36, 20), _attrs(15, 0.96 * ka, weight=0.6))
-        ov = self.overlay
-        copied = ov.flash_index == idx and time.time() - ov.flash_t0 < 1.2
-        sub = "Copié ✓" if copied else tile.get("subtitle", "")
-        sa = _attrs(11.5, (0.95 if copied else 0.55) * ka)
-        if copied:
-            sa = dict(sa); sa[NSForegroundColorAttributeName] = c(0.95 * ka)
-        _draw_text(sub, NSMakeRect(rect.origin.x + 18, rect.origin.y + 20, w - 36, 16), sa)
+        _draw_text(tile["title"].upper(), NSMakeRect(rect.origin.x + 18, rect.origin.y + 40, w - 36, 20),
+                   _attrs(15, ka, weight=600, color=theme.ns(theme.ENCRE if on else theme.ENCRE_3, ka)))
+        sub = "Copié" if copied else tile.get("subtitle", "")
+        _draw_text(sub, NSMakeRect(rect.origin.x + 18, rect.origin.y + 20, w - 36, 16),
+                   _attrs(11.5, ka, color=theme.ns(theme.O_PETIT if copied else theme.ENCRE_3, ka)))
 
     @objc.python_method
     def _draw_panel(self, panel, k):
@@ -870,7 +801,6 @@ class _BandView(NSView):
         # Le verrou de marque : le logotype AUR'IA, puis FLOW à la même hauteur de
         # capitale. « Le mot » est la forme par défaut d'un en-tête ; le produit
         # dérivé s'accroche derrière plutôt que de refaire un dessin.
-        ta = _attrs(15, 0.95 * k, weight=700)
         lw = self._draw_lockup(x0, top - M - 16, 15.0, k)
         status = data.get("status", "")
         if status:
@@ -878,9 +808,6 @@ class _BandView(NSView):
             _draw_text(status, NSMakeRect(sx, top - M - 17, inner_w - (sx - x0) - 60, 18),
                        _attrs(11.5, 0.42 * k))
         _draw_text(data.get("stats_line", ""), NSMakeRect(x0, top - M - 36, inner_w - 80, 14), _attrs(11, 0.55 * k))
-        orb_d = 36.0
-        ov.orb_center = (px + pw - M - orb_d / 2, top - M - orb_d / 2 + 2)
-        self._draw_orb(ov.orb_center[0], ov.orb_center[1], orb_d, k)
 
         tiles = data.get("tiles", [])
         gap = 14.0
@@ -927,10 +854,6 @@ class Overlay:
         self.content_alpha = 1.0
         self.flash_index = -1
         self.flash_t0 = 0.0
-        self.gaze = (0.0, 0.0)          # direction du regard (-1..1)
-        self.orb_center = (0.0, 0.0)    # en coordonnées vue
-        self._next_blink = time.time() + 3.0
-        self._blink_t0 = None
         self._data_cache = None
         self._data_cache_t = 0.0
 
@@ -1059,7 +982,7 @@ class Overlay:
         cw, ch = self.cur_w, self.cur_h
         b = self.container.bounds()
         rect = NSMakeRect((b.size.width - cw) / 2.0, PAD, cw, ch)
-        radius = min(ch / 2.0, 22.0)
+        radius = theme.RAYON_CARTE if ch > 60.0 else theme.RAYON_FLOTTANT
         if self.glass is not None:
             self.glass.setFrame_(rect)
             try:
@@ -1210,33 +1133,6 @@ class Overlay:
         self._data_cache = None
         self.view.setNeedsDisplay_(True)
 
-    def blink_amount(self):
-        if self._blink_t0 is None:
-            return 0.0
-        t = (time.time() - self._blink_t0) / 0.14
-        if t >= 1.0:
-            return 0.0
-        return math.sin(t * math.pi)  # ferme puis rouvre
-
-    def _update_gaze(self, now):
-        """Les yeux suivent la souris (position écran → vue), avec lissage."""
-        try:
-            loc = NSEvent.mouseLocation()
-            f = self.panel.frame()
-            vx, vy = loc.x - f.origin.x, loc.y - f.origin.y
-            dx, dy = vx - self.orb_center[0], vy - self.orb_center[1]
-            dist = math.hypot(dx, dy) or 1.0
-            norm = min(1.0, dist / 220.0)
-            tx, ty = dx / dist * norm, dy / dist * norm
-            self.gaze = (self.gaze[0] + (tx - self.gaze[0]) * 0.25, self.gaze[1] + (ty - self.gaze[1]) * 0.25)
-        except Exception:
-            pass
-        if now >= self._next_blink:
-            self._blink_t0 = now
-            self._next_blink = now + 2.5 + (now * 7.3) % 3.5  # pseudo-aléatoire 2,5–6 s
-        elif self._blink_t0 is not None and now - self._blink_t0 > 0.2:
-            self._blink_t0 = None
-
     def refresh(self):
         self._data_cache = None
         self.view.setNeedsDisplay_(True)
@@ -1315,8 +1211,6 @@ class Overlay:
             # la fin se sente franche au lieu de traîner.
             target = self._progress_target(now)
             self.progress_p += (target - self.progress_p) * (0.40 if self.progress_done else 0.16)
-        if self.state == "expanded":
-            self._update_gaze(now)
         if self.state in ("recording", "meeting"):
             try:
                 lv = float(self._level_source())
