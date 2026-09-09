@@ -187,6 +187,27 @@ class BoutEnBout(unittest.TestCase):
         self.assertTrue(ok, msg=message)
         self.assertEqual(c.creations, 1)
 
+    def test_la_note_est_transmise(self):
+        """La phrase dictée doit arriver jusqu'à TimeTree, pas s'arrêter ici."""
+        vus = {}
+        c = self.client("ok")
+        vrai = c._tool
+        c._tool = lambda nom, args, timeout=None: (vus.update({nom: args}) or
+                                                   vrai(nom, args, timeout or timetree.REPONSE_TIMEOUT_S))
+        c.warm("1001056215")
+        c.create("1001056215", dict(EVENT, note="demain 14h déjeuner avec César au bureau"))
+        self.assertEqual(vus["create_event"]["note"], "demain 14h déjeuner avec César au bureau")
+
+    def test_sans_note_pas_de_champ_vide(self):
+        vus = {}
+        c = self.client("ok")
+        vrai = c._tool
+        c._tool = lambda nom, args, timeout=None: (vus.update({nom: args}) or
+                                                   vrai(nom, args, timeout or timetree.REPONSE_TIMEOUT_S))
+        c.warm("1001056215")
+        c.create("1001056215", dict(EVENT, note=""))
+        self.assertNotIn("note", vus["create_event"])
+
     def test_agenda_absent_du_compte(self):
         c = self.client("ok")
         ok, message = c.warm("999999")

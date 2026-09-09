@@ -163,6 +163,22 @@ class ConstruitLEvenement(unittest.TestCase):
         self.assertEqual(ev["_libelle"], "Demain 14:00")
         self.assertNotIn("_debut_local", ev)   # pas d'objet datetime jusqu'à TimeTree
 
+    def test_la_phrase_entiere_est_conservee_en_note(self):
+        """Le titre est une réduction ; la note garde tout ce qui a été dit.
+
+        Vécu : « meeting avec Karim pour préparer le front end de Yalai » est
+        devenu « Meeting avec Karim » — le motif de la réunion disparaissait
+        sans laisser de trace.
+        """
+        phrase = "demain à 14 heures j'ai un meeting avec Karim pour préparer le front end de Yalai"
+        ev = build_event({"titre": "Meeting avec Karim", "jour": "demain", "heure": "14:00",
+                          "duree_min": 60, "journee_entiere": False}, self.NOW, texte=phrase)
+        self.assertEqual(ev["note"], phrase)
+        self.assertIn("Yalai", ev["note"])
+
+    def test_note_vide_sans_phrase(self):
+        self.assertEqual(build_event(self.BRUT, self.NOW)["note"], "")
+
     def test_sans_titre(self):
         self.assertIsNone(build_event({**self.BRUT, "titre": ""}, self.NOW))
 

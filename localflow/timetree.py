@@ -297,6 +297,8 @@ class TimeTreeMCP:
             "start_timezone": event["start_timezone"],
             "end_timezone": event["end_timezone"],
         }
+        if event.get("note"):
+            arguments["note"] = event["note"]
         dernier = ""
         for tentative in range(1, TENTATIVES + 1):
             if tentative > 1:

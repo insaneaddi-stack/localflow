@@ -42,8 +42,10 @@ SYSTEM_PROMPT = (
     "Tu extrais un événement d'agenda d'une phrase dictée en français. "
     "Réponds UNIQUEMENT avec un objet JSON, sans texte autour, sans balise de code.\n"
     "Clés attendues :\n"
-    '  "titre"           : ce qui se passe, formulé court et à l\'infinitif ou en nom. '
-    "Retire les mots de commande (« mets-moi un événement », « ajoute dans mon agenda »).\n"
+    '  "titre"           : ce qui se passe, AVEC les personnes concernées et l\'objet. '
+    "Retire seulement les mots de commande (« mets-moi un événement », « ajoute dans "
+    "mon agenda ») et la date. Garde tout le reste : qui, quoi, et pourquoi. "
+    "N'abrège pas, ne résume pas.\n"
     '  "jour"            : UNIQUEMENT l\'un de : "aujourd\'hui", "demain", "après-demain", '
     'un nom de jour ("lundi"..."dimanche"), ou une date "AAAA-MM-JJ". Jamais un calcul.\n'
     '  "heure"           : "HH:MM" en 24 h, ou null si la phrase n\'en donne pas.\n'
@@ -67,6 +69,14 @@ FEW_SHOT = [
         "note un point d’équipe lundi prochain à 9h30 pendant deux heures",
         '{"titre": "Point d\'équipe", "jour": "lundi", "heure": "09:30", '
         '"duree_min": 120, "journee_entiere": false}',
+    ),
+    # Cet exemple-là vient d'un vrai raté : le titre retenu était « Meeting avec
+    # Karim », le motif de la réunion passait à la trappe. C'est exactement ce
+    # qu'il ne faut pas faire, donc on montre l'inverse.
+    (
+        "demain à 14 heures j'ai un meeting avec Karim pour préparer le front end de Yalai",
+        '{"titre": "Meeting avec Karim — préparer le front end de Yalai", "jour": "demain", '
+        '"heure": "14:00", "duree_min": 60, "journee_entiere": false}',
     ),
 ]
 
@@ -292,7 +302,13 @@ def build_event(brut, now, texte=""):
     if quand is None:
         return None
     debut_local = quand.pop("_debut_local")
-    quand.update({"title": titre, "_libelle": humanize(debut_local, quand["all_day"], now)})
+    # La phrase entière part dans la note. Le titre est une réduction, et une
+    # réduction perd toujours quelque chose : « meeting avec Karim pour préparer
+    # le front end de Yalai » était devenu « Meeting avec Karim ». La note est
+    # la seule garantie que rien de ce qui a été dit ne disparaisse.
+    quand.update({"title": titre,
+                  "note": " ".join(texte.split()) if texte else "",
+                  "_libelle": humanize(debut_local, quand["all_day"], now)})
     return quand
 
 
