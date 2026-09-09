@@ -30,6 +30,15 @@ fi
 echo "   ✅ $NODE ($("$NODE" --version))"
 
 echo "==> Identifiants TimeTree"
+# Sans terminal interactif (lancé depuis un agent, un hook, ou le préfixe « ! »
+# de Claude Code), `read` attend une saisie qui n'arrivera jamais : le script
+# reste pendu sans rien dire. On le dit tout de suite.
+if [ ! -t 0 ]; then
+  echo "❌ Ce script doit te poser deux questions : il lui faut un vrai Terminal."
+  echo "   Ouvre l'app Terminal (⌘Espace → « Terminal »), puis colle :"
+  echo "   cd \"$PWD\" && ./install-timetree.sh"
+  exit 1
+fi
 if security find-generic-password -s "$SERVICE" >/dev/null 2>&1; then
   COMPTE=$(security find-generic-password -s "$SERVICE" 2>&1 | sed -n 's/.*"acct"<blob>="\(.*\)"/\1/p')
   printf "   Déjà dans le trousseau (%s). Les remplacer ? [o/N] " "$COMPTE"
