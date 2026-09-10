@@ -19,13 +19,42 @@ jour compris, date aberrante — on renvoie None et l'appelant prévient.
 
 import datetime
 import json
+import os
 import re
 import threading
 from zoneinfo import ZoneInfo
 
 LLM_MODEL_ID = "mlx-community/Qwen3-1.7B-4bit"   # déjà chargé par cleanup.py
 
-TZ = ZoneInfo("Europe/Paris")
+
+def local_tz_name():
+    """Nom IANA du fuseau de la machine (« Europe/Paris », « Africa/Casablanca »).
+
+    Surtout pas de fuseau écrit en dur. « Mets-moi ça à 14 heures » veut dire
+    14 heures à l'horloge qu'on a sous les yeux. Un Mac réglé sur Casablanca
+    avec du Paris en dur dans le code décale tout d'une heure — c'est
+    exactement ce qui est arrivé le 10 septembre 2026.
+    """
+    try:
+        chemin = os.path.realpath("/etc/localtime")
+        if "/zoneinfo/" in chemin:
+            return chemin.split("/zoneinfo/", 1)[1]
+    except OSError:
+        pass
+    return os.environ.get("TZ") or "UTC"
+
+
+def local_tz():
+    try:
+        return ZoneInfo(local_tz_name())
+    except Exception:
+        # Fuseau introuvable dans la base : on garde au moins le bon décalage.
+        return datetime.datetime.now().astimezone().tzinfo
+
+
+def tz_name_of(tzinfo):
+    """Nom IANA d'un fuseau, pour le champ que TimeTree stocke à côté de l'instant."""
+    return getattr(tzinfo, "key", None) or local_tz_name()
 
 DUREE_DEFAUT_MIN = 60
 TITRE_MAX = 200
@@ -223,10 +252,13 @@ def resolve_day(jour, today):
 def resolve_when(jour, heure, duree_min, journee_entiere, now):
     """Descripteurs relatifs → horodatages TimeTree (ms), ou None.
 
-    `now` est un datetime AWARE (Europe/Paris) : la fonction ne lit jamais
-    l'horloge elle-même, c'est ce qui la rend testable au passage à l'heure
-    d'hiver comme un dimanche à 23 h.
+    `now` est un datetime AWARE : la fonction ne lit jamais l'horloge
+    elle-même, c'est ce qui la rend testable au passage à l'heure d'hiver
+    comme un dimanche à 23 h. C'est SON fuseau qui fait foi partout ici — la
+    date de « demain » comme l'heure de « 14 h ».
     """
+    tz = now.tzinfo or local_tz()
+    tz_nom = tz_name_of(tz)
     jour_d = resolve_day(jour, now.date())
     if jour_d is None:
         return None
@@ -239,13 +271,13 @@ def resolve_when(jour, heure, duree_min, journee_entiere, now):
         minuit = datetime.datetime(jour_d.year, jour_d.month, jour_d.day,
                                    tzinfo=datetime.timezone.utc)
         ms = int(minuit.timestamp() * 1000)
-        debut_local = datetime.datetime(jour_d.year, jour_d.month, jour_d.day, tzinfo=TZ)
+        debut_local = datetime.datetime(jour_d.year, jour_d.month, jour_d.day, tzinfo=tz)
         quand = {"start_ms": ms, "end_ms": ms, "all_day": True,
                  "start_timezone": "UTC", "end_timezone": "UTC",
                  "_debut_local": debut_local}
     else:
         h, mn = hm
-        debut = datetime.datetime(jour_d.year, jour_d.month, jour_d.day, h, mn, tzinfo=TZ)
+        debut = datetime.datetime(jour_d.year, jour_d.month, jour_d.day, h, mn, tzinfo=tz)
         try:
             duree = int(duree_min)
         except (TypeError, ValueError):
@@ -256,7 +288,7 @@ def resolve_when(jour, heure, duree_min, journee_entiere, now):
         quand = {"start_ms": int(debut.timestamp() * 1000),
                  "end_ms": int(fin.timestamp() * 1000),
                  "all_day": False,
-                 "start_timezone": "Europe/Paris", "end_timezone": "Europe/Paris",
+                 "start_timezone": tz_nom, "end_timezone": tz_nom,
                  "_debut_local": debut}
 
     ecart = quand["_debut_local"] - now
@@ -356,7 +388,7 @@ class CalendarIntent:
         text = (text or "").strip()
         if not text:
             return None
-        now = now or datetime.datetime.now(TZ)
+        now = now or datetime.datetime.now(local_tz())
         try:
             model, tokenizer = self._load()
             from mlx_lm import generate

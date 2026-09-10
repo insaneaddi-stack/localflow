@@ -14,11 +14,12 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from localflow.calendar_intent import (
-    build_event, clean_title, extract_json, find_day, humanize, mentions_time,
-    resolve_day, resolve_when,
+    build_event, clean_title, extract_json, find_day, humanize, local_tz_name,
+    mentions_time, resolve_day, resolve_when, tz_name_of,
 )
 
 TZ = ZoneInfo("Europe/Paris")
+CASA = ZoneInfo("Africa/Casablanca")
 
 
 def ms(annee, mois, jour, h=0, mn=0):
@@ -130,6 +131,49 @@ class ResoutLeMoment(unittest.TestCase):
 
     def test_jour_incomprehensible(self):
         self.assertIsNone(resolve_when("un de ces jours", "10:00", 60, False, self.NOW))
+
+
+class LeFuseauEstCeluiDeLaMachine(unittest.TestCase):
+    """« 14 heures » veut dire 14 heures à l'horloge qu'on a sous les yeux.
+
+    Vécu le 10 sept. 2026 : Mac réglé sur Africa/Casablanca (UTC+1), Europe/Paris
+    (UTC+2) écrit en dur dans le code. « Demain à 14 heures » était stocké à
+    12:00 UTC, que TimeTree affichait à 13:00 sur l'appareil. Une heure de moins,
+    à chaque événement.
+    """
+
+    def test_le_fuseau_de_now_fait_foi(self):
+        casa = resolve_when("demain", "14:00", 60, False,
+                            datetime.datetime(2026, 9, 10, 1, 0, tzinfo=CASA))
+        paris = resolve_when("demain", "14:00", 60, False,
+                             datetime.datetime(2026, 9, 10, 1, 0, tzinfo=TZ))
+        self.assertEqual(casa["start_ms"], ms(2026, 9, 11, 13, 0))   # 14 h à Casablanca
+        self.assertEqual(paris["start_ms"], ms(2026, 9, 11, 12, 0))  # 14 h à Paris
+        self.assertNotEqual(casa["start_ms"], paris["start_ms"])
+
+    def test_le_nom_du_fuseau_suit(self):
+        q = resolve_when("demain", "14:00", 60, False,
+                         datetime.datetime(2026, 9, 10, 1, 0, tzinfo=CASA))
+        self.assertEqual(q["start_timezone"], "Africa/Casablanca")
+        self.assertEqual(q["end_timezone"], "Africa/Casablanca")
+
+    def test_la_date_aussi_depend_du_fuseau(self):
+        """À 23h30 à Casablanca il est déjà 00h30 à Paris : « demain » n'est pas
+        le même jour. Le fuseau ne décale pas que les heures."""
+        tard = datetime.datetime(2026, 9, 10, 23, 30, tzinfo=CASA)
+        q = resolve_when("demain", None, 60, True, tard)
+        self.assertEqual(q["start_ms"], ms(2026, 9, 11))    # le 11, pas le 12
+
+    def test_nom_iana_lisible_sur_cette_machine(self):
+        nom = local_tz_name()
+        self.assertTrue(nom, "aucun fuseau lu sur la machine")
+        self.assertNotIn("/zoneinfo/", nom)
+        ZoneInfo(nom)      # doit être un nom que zoneinfo accepte
+
+    def test_tz_name_of(self):
+        self.assertEqual(tz_name_of(CASA), "Africa/Casablanca")
+        self.assertEqual(tz_name_of(TZ), "Europe/Paris")
+        self.assertEqual(tz_name_of(None), local_tz_name())   # repli sur la machine
 
 
 class NettoieLeTitre(unittest.TestCase):
