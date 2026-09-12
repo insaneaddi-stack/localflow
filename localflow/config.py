@@ -5,6 +5,11 @@ import json
 import os
 
 CONFIG_PATH = os.path.expanduser("~/.localflow.json")
+# L'historique vit à part, en append : il grossit tous les jours, alors que le
+# reste du fichier de réglages ne change presque jamais. Les garder ensemble
+# obligeait à réécrire tout le JSON à chaque dictée — et imposait un plafond
+# si bas (300) qu'à 80 dictées par jour il ne restait pas quatre jours.
+HISTORY_PATH = os.path.expanduser("~/.localflow.history.jsonl")
 
 DEFAULTS = {
     "cleanup_enabled": False,    # Qwen : +0,8 s ; Qwen3-ASR sort déjà un texte ponctué
@@ -25,11 +30,11 @@ DEFAULTS = {
     "calendar_preview_s": 3.0,   # aperçu annulable (Esc) avant que l'événement parte
     "calendar_mcp_path": "~/Desktop/Projects/TIMETREE/dist/index.js",   # serveur MCP TimeTree
     "decode_times": [],          # [[durée audio s, temps de décodage s]] : calibre la barre de progression
-    "history": [],               # [{"t": iso, "text": str, "app": str}], plus récent en premier
     "stats": {},                 # {"YYYY-MM-DD": {"words": n, "dictations": n, "audio_s": s}}
 }
 
-HISTORY_MAX = 300
+HISTORY_MAX = 20000       # ~8 mois à 80 dictées par jour
+HISTORY_TRIM = 30000      # au-delà, on réécrit le fichier (au démarrage seulement)
 TYPING_WPM = 40.0  # vitesse de frappe moyenne pour estimer le temps gagné
 
 def _bool_prop(key):
@@ -58,6 +63,70 @@ class Config:
             now = datetime.datetime.now().isoformat(timespec="seconds")
             self.data["history"] = [{"t": now, "text": t, "app": ""} for t in hist]
         self._purger_coupures_apprises()
+        self._history = self._charger_historique()
+        self._demenager_historique()
+
+    # ---- fichier d'historique (append) ----
+
+    def _charger_historique(self):
+        """Lit le .jsonl et rend la liste en mémoire : plus récent d'abord,
+        un seul exemplaire par texte."""
+        lignes = []
+        try:
+            with open(HISTORY_PATH, encoding="utf-8") as f:
+                for ligne in f:
+                    ligne = ligne.strip()
+                    if not ligne:
+                        continue
+                    try:
+                        e = json.loads(ligne)
+                    except json.JSONDecodeError:
+                        continue   # une ligne tronquée n'emporte pas les autres
+                    if isinstance(e, dict) and e.get("text"):
+                        lignes.append(e)
+        except OSError:
+            return []
+        vus, out = set(), []
+        for e in reversed(lignes):
+            if e["text"] in vus:
+                continue
+            vus.add(e["text"])
+            out.append(e)
+            if len(out) >= HISTORY_MAX:
+                break
+        # Le fichier garde les doublons que la lecture écarte : on ne le réécrit
+        # que quand il déborde vraiment, et jamais en cours de route.
+        if len(lignes) > HISTORY_TRIM:
+            self._reecrire_historique(out)
+        return out
+
+    def _reecrire_historique(self, entrees):
+        """Réécriture atomique, du plus ancien au plus récent."""
+        tmp = HISTORY_PATH + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                for e in reversed(entrees):
+                    f.write(json.dumps(e, ensure_ascii=False) + "\n")
+            os.replace(tmp, HISTORY_PATH)
+        except OSError:
+            pass
+
+    def _demenager_historique(self):
+        """Sort l'historique du fichier de réglages, une fois pour toutes."""
+        anciennes = self.data.pop("history", None)
+        if not anciennes:
+            return
+        connus = {e["text"] for e in self._history}
+        a_ecrire = [e for e in reversed(anciennes)
+                    if isinstance(e, dict) and e.get("text") and e["text"] not in connus]
+        try:
+            with open(HISTORY_PATH, "a", encoding="utf-8") as f:
+                for e in a_ecrire:
+                    f.write(json.dumps(e, ensure_ascii=False) + "\n")
+        except OSError:
+            return
+        self._history = self._charger_historique()
+        self.save()
 
     def _purger_coupures_apprises(self):
         """Jette les corrections qui ne sont qu'un mot coupé en deux.
@@ -129,7 +198,7 @@ class Config:
 
     @property
     def history(self):
-        return list(self.data.get("history", []))
+        return list(self._history)
 
     def add_history(self, text, app=""):
         entry = {
@@ -137,13 +206,20 @@ class Config:
             "text": text,
             "app": app,
         }
-        history = [entry] + [e for e in self.history if e.get("text") != text]
-        self.data["history"] = history[:HISTORY_MAX]
-        self.save()
+        self._history = [entry] + [e for e in self._history if e.get("text") != text]
+        del self._history[HISTORY_MAX:]
+        try:
+            with open(HISTORY_PATH, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
 
     def clear_history(self):
-        self.data["history"] = []
-        self.save()
+        self._history = []
+        try:
+            os.remove(HISTORY_PATH)
+        except OSError:
+            pass
 
     # ---- statistiques ----
 
