@@ -2,12 +2,15 @@
 survol, clic = copier, recherche, stats. Dessin custom (pas de NSTableView)."""
 
 import datetime
+import os
+import threading
 import time
 
 import objc
 from AppKit import (
     NSApp,
     NSAppearance,
+    NSApplicationActivateIgnoringOtherApps,
     NSApplicationActivationPolicyAccessory,
     NSApplicationActivationPolicyRegular,
     NSBackingStoreBuffered,
@@ -15,6 +18,9 @@ from AppKit import (
     NSColor,
     NSColorSpace,
     NSCursor,
+    NSEvent,
+    NSEventMaskKeyDown,
+    NSEventModifierFlagCommand,
     NSFont,
     NSFontAttributeName,
     NSForegroundColorAttributeName,
@@ -40,12 +46,13 @@ from AppKit import (
     NSWindowStyleMaskResizable,
     NSWindowStyleMaskTitled,
     NSWindowTitleHidden,
+    NSWorkspace,
 )
 from Foundation import NSObject
 
 from . import theme
 from .overlay import _BandView, _attrs, _draw_text, _text_width, _encre
-from .paste import copy_text
+from .paste import copy_text, paste_text
 
 W, H = 760.0, 700.0
 STATS_H = 150.0
@@ -54,6 +61,9 @@ ROW_H = 66.0
 # Copier, c'est pour coller ailleurs : on laisse juste le temps de voir
 # « Copié », puis la fenêtre s'efface et rend le focus à l'app d'avant.
 FERMETURE_APRES_COPIE_S = 0.45
+# Le temps que l'app d'avant reprenne le premier plan avant qu'on tape ⌘V.
+DELAI_AVANT_COLLAGE_S = 0.25
+HAUT, BAS, ENTREE, ENTREE_PAVE, ECHAP, W = 126, 125, 36, 76, 53, 13
 # BG a disparu : le fond vient de theme.FOND (le crème du système).
 
 def _fmt_time(iso):
@@ -80,6 +90,7 @@ class _ListView(NSView):
             return None
         self.rows = []
         self.hover_pt = None
+        self.selected = -1        # -1 = personne ; piloté par ↑↓, pas par la souris
         self.flash_index = -1
         self.flash_t0 = 0.0
         self.on_copy = None
@@ -124,10 +135,29 @@ class _ListView(NSView):
     @objc.python_method
     def set_rows(self, rows):
         self.rows = rows
+        self.selected = min(self.selected, len(rows) - 1)
         h = max(ROW_H * len(rows), 10.0)
         f = self.frame()
         self.setFrame_(NSMakeRect(0, 0, f.size.width, h))
         self.setNeedsDisplay_(True)
+
+    @objc.python_method
+    def move_selection(self, delta):
+        """↑↓ : déplace la sélection et la garde à l'écran. Vrai si ça a bougé."""
+        if not self.rows:
+            return False
+        i = 0 if self.selected < 0 else max(0, min(len(self.rows) - 1, self.selected + delta))
+        self.selected = i
+        self.scrollRectToVisible_(NSMakeRect(0, i * ROW_H - 4, self.bounds().size.width, ROW_H + 8))
+        self.setNeedsDisplay_(True)
+        return True
+
+    @objc.python_method
+    def current(self):
+        """La ligne visée par ⏎ : celle qu'on a choisie, sinon la plus récente."""
+        if not self.rows:
+            return None
+        return self.rows[self.selected if self.selected >= 0 else 0]
 
     def drawRect_(self, dirty):
         w = self.bounds().size.width
@@ -136,7 +166,8 @@ class _ListView(NSView):
             if y + ROW_H < dirty.origin.y or y > dirty.origin.y + dirty.size.height:
                 continue
             rect = NSMakeRect(M, y + 4, w - 2 * M, ROW_H - 8)
-            hovered = self.hover_pt is not None and NSPointInRect(self.hover_pt, rect)
+            chosen = self.selected == i
+            hovered = chosen or (self.hover_pt is not None and NSPointInRect(self.hover_pt, rect))
             copied = self.flash_index == i and time.time() - self.flash_t0 < 1.2
             # Chaque ligne portait une aura colorée montant de la gauche, teintée
             # par app. Le système l'exclut deux fois : « une seule action colorée
@@ -147,8 +178,8 @@ class _ListView(NSView):
                 rect, theme.RAYON_CARTE, theme.RAYON_CARTE)
             theme.ns(theme.CARTE if hovered else theme.FOND_PUR).setFill()
             path.fill()
-            theme.ns(theme.O_PETIT if copied else theme.TRAIT).setStroke()
-            path.setLineWidth_(theme.FILET * (2.0 if copied else 1.0))
+            theme.ns(theme.O_PETIT if copied else (theme.TRAIT_FORT if chosen else theme.TRAIT)).setStroke()
+            path.setLineWidth_(theme.FILET * (2.0 if copied or chosen else 1.0))
             path.stroke()
             theme.ns(theme.O_VITRINE if copied else theme.ENCRE_3, 0.9).setFill()
             NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(rect.origin.x + 18, rect.origin.y + rect.size.height / 2 - 4, 8, 8)).fill()
@@ -157,7 +188,7 @@ class _ListView(NSView):
             _draw_text(label, NSMakeRect(rect.origin.x + 40, rect.origin.y + 10, 260, 14), _attrs(10.5, 0.5, weight=0.5))
             # Un clic copie la ligne, mais rien ne le disait avant d'avoir essayé :
             # au survol, l'heure cède la place à l'action.
-            right = "Copié" if copied else ("Copier" if hovered else _fmt_time(e.get("t", "")))
+            right = "Copié" if copied else ("Coller ⏎" if chosen else ("Copier" if hovered else _fmt_time(e.get("t", ""))))
             ra = _attrs(10.5, 0.95 if copied else (0.75 if hovered else 0.4), weight=0.5)
             if copied:
                 ra = dict(ra); ra[NSForegroundColorAttributeName] = c(0.95)
@@ -247,6 +278,8 @@ class HistoryWindow(NSObject):
         self.config = config
         self.notify = notify
         self.window = None
+        self.moniteur = None
+        self.app_precedente = None   # à qui rendre le clavier en partant
         return self
 
     def _build(self):
@@ -297,6 +330,65 @@ class HistoryWindow(NSObject):
         scroll.setDocumentView_(self.list)
         content.addSubview_(scroll)
         self.window = win
+        self._ecouter_le_clavier()
+
+    @objc.python_method
+    def _ecouter_le_clavier(self):
+        """↑↓ ⏎ Esc ⌘W, quel que soit le premier répondeur.
+
+        La recherche garde le focus pendant qu'on navigue — comme Spotlight :
+        on affine en tapant sans jamais quitter le champ. Un moniteur local
+        voit les touches avant le champ d'édition, qui sinon avalerait ↑↓.
+        """
+        if self.moniteur is not None:
+            return
+
+        def touche(event):
+            if self.window is None or event.window() is not self.window:
+                return event
+            code = event.keyCode()
+            cmd = bool(event.modifierFlags() & NSEventModifierFlagCommand)
+            if cmd:
+                return None if (code == W and self._fermer()) else event
+            if code in (HAUT, BAS):
+                return None if self.list.move_selection(-1 if code == HAUT else 1) else event
+            if code in (ENTREE, ENTREE_PAVE):
+                self._coller_la_selection()
+                return None
+            if code == ECHAP:
+                # Esc vide d'abord la recherche : on se trompe plus souvent de
+                # requête que de fenêtre.
+                if (self.search.stringValue() or "").strip():
+                    self.search.setStringValue_("")
+                    self.refresh()
+                else:
+                    self._fermer()
+                return None
+            return event
+
+        self.moniteur = NSEvent.addLocalMonitorForEventsMatchingMask_handler_(
+            NSEventMaskKeyDown, touche)
+
+    @objc.python_method
+    def _fermer(self):
+        if self.window is None:
+            return False
+        self.list.flash_index = -1
+        self.window.close()
+        return True
+
+    @objc.python_method
+    def _coller_la_selection(self):
+        """⏎ : le texte atterrit dans l'app d'où l'on vient, pas dans le presse-papiers."""
+        entry = self.list.current()
+        if entry is None:
+            return
+        texte = entry.get("text", "")
+        cible = self.app_precedente
+        self._fermer()
+        if cible is not None:
+            cible.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
+        threading.Timer(DELAI_AVANT_COLLAGE_S, lambda: paste_text(texte)).start()
 
     @objc.python_method
     def _copy_entry(self, entry):
@@ -304,10 +396,7 @@ class HistoryWindow(NSObject):
         self.performSelector_withObject_afterDelay_("closeAfterCopy:", None, FERMETURE_APRES_COPIE_S)
 
     def closeAfterCopy_(self, _):
-        if self.window is None:
-            return
-        self.list.flash_index = -1   # la prochaine ouverture repart propre
-        self.window.close()
+        self._fermer()
 
     def refresh(self):
         if self.window is None:
@@ -333,15 +422,27 @@ class HistoryWindow(NSObject):
     def show(self):
         if self.window is None:
             self._build()
+        try:
+            devant = NSWorkspace.sharedWorkspace().frontmostApplication()
+            if devant is not None and devant.processIdentifier() != os.getpid():
+                self.app_precedente = devant
+        except Exception:
+            self.app_precedente = None
+        self.list.selected = -1
+        self.search.setStringValue_("")
         self.refresh()
         NSApp.setActivationPolicy_(NSApplicationActivationPolicyRegular)
         NSApp.activateIgnoringOtherApps_(True)
         self.window.makeKeyAndOrderFront_(None)
+        # Sans ça la fenêtre s'ouvre sans premier répondeur : il fallait viser
+        # le champ à la souris avant de pouvoir chercher quoi que ce soit.
+        self.window.makeFirstResponder_(self.search)
 
     def windowWillClose_(self, notification):
         NSApp.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
 
     def searchChanged_(self, sender):
+        self.list.selected = -1
         self.refresh()
 
 class _Header(NSView):
