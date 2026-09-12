@@ -57,6 +57,26 @@ class Config:
         if hist and isinstance(hist[0], str):
             now = datetime.datetime.now().isoformat(timespec="seconds")
             self.data["history"] = [{"t": now, "text": t, "app": ""} for t in hist]
+        self._purger_coupures_apprises()
+
+    def _purger_coupures_apprises(self):
+        """Jette les corrections qui ne sont qu'un mot coupé en deux.
+
+        learning.py ne les apprend plus, mais celles déjà en base attendaient
+        d'atteindre le seuil pour se mettre à taper « pro duit » à la place de
+        « produit ». On les retire une bonne fois.
+        """
+        from .learning import est_un_mot_coupe
+
+        learned = self.data.get("learned")
+        if not isinstance(learned, dict):
+            return
+        morts = [bad for bad, e in learned.items()
+                 if isinstance(e, dict) and est_un_mot_coupe(bad, str(e.get("to", "")))]
+        for bad in morts:
+            del learned[bad]
+        if morts:
+            self.save()
 
     def save(self):
         tmp = CONFIG_PATH + ".tmp"

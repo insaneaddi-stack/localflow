@@ -23,6 +23,21 @@ MAX_PHRASE = 3           # longueur max, en mots, d'une correction apprise
 MIN_RATIO = 0.6
 _WORD = re.compile(r"[A-Za-zÀ-ÿœæŒÆ'’-]+")
 
+def _sans_blancs(s: str) -> str:
+    return re.sub(r"\s+", "", s).lower()
+
+def est_un_mot_coupe(bad: str, good: str) -> bool:
+    """« produit » → « pro duit » : mêmes lettres, plus de morceaux.
+
+    Le champ relu via Accessibilité rend le texte TEL QU'AFFICHÉ : un mot coupé
+    par un retour à la ligne y revient en deux. Sans ce garde-fou on apprenait
+    la coupure comme une correction humaine, et au seuil atteint LocalFlow se
+    mettait à taper « pro duit ». Le sens inverse (« wispr flow » → « WisprFlow »)
+    reste apprenable : seul le découpage est un artefact de mise en page.
+    """
+    return (_sans_blancs(bad) == _sans_blancs(good)
+            and len(good.split()) > len(bad.split()))
+
 
 def _phrase_re(bad: str) -> str:
     """Motif d'une entrée apprise : les espaces internes acceptent tout blanc,
@@ -69,6 +84,8 @@ def diff_corrections(pasted: str, current: str):
             continue
         bad, good = " ".join(a[i1:i2]), " ".join(b[j1:j2])
         if len(bad) < 3 or len(good) < 2 or bad.lower() == good.lower():
+            continue
+        if est_un_mot_coupe(bad, good):
             continue
         if difflib.SequenceMatcher(None, bad.lower(), good.lower()).ratio() < MIN_RATIO:
             continue  # trop différent : probablement une reformulation, pas une correction

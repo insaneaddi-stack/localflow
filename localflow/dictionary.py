@@ -6,6 +6,7 @@ Format (une entrée par ligne, # = commentaire) :
 """
 
 import difflib
+import functools
 import os
 import re
 
@@ -20,6 +21,38 @@ whisperflow -> Wispr Flow
 """
 
 _WORD_RE = re.compile(r"[A-Za-zÀ-ÿœæŒÆ0-9'’-]+")
+
+@functools.lru_cache(maxsize=1)
+def _correcteur():
+    try:
+        from AppKit import NSSpellChecker
+
+        return NSSpellChecker.sharedSpellChecker()
+    except Exception:
+        return None
+
+@functools.lru_cache(maxsize=4096)
+def mot_du_francais_ou_de_l_anglais(mot: str) -> bool:
+    """Vrai si macOS reconnaît le mot. Sert de bouclier à la correction floue.
+
+    Le ratio seul ne peut pas trancher : « aura » ressemble à « AUR'IA » autant
+    que « linky » ressemble à « Linki » (0,80 tous les deux), et « chaude » à
+    « Claude » autant que « auriya » à « AUR'IA » (0,83). Ce qui les sépare
+    n'est pas la distance mais le fait qu'« aura », « link » et « chaude »
+    existent — on ne les touche pas, quoi qu'il arrive.
+    """
+    sc = _correcteur()
+    if sc is None:
+        return False   # pas de bouclier disponible : on garde l'ancien comportement
+    for langue in ("fr", "en"):
+        try:
+            portee = sc.checkSpellingOfString_startingAt_language_wrap_inSpellDocumentWithTag_wordCount_(
+                mot, 0, langue, False, 0, None)[0]
+        except Exception:
+            return False
+        if portee.length == 0:   # aucune faute relevée → le mot existe
+            return True
+    return False
 
 class Dictionary:
     def __init__(self, path=DICT_PATH):
@@ -96,6 +129,10 @@ class Dictionary:
             if len(tok) < 4:
                 return tok
             best = difflib.get_close_matches(low, lowered.keys(), n=1, cutoff=0.8)
-            return lowered[best[0]] if best else tok
+            # Le correcteur n'est interrogé que sur les mots DÉJÀ rapprochés :
+            # une poignée par dictée, et le cache absorbe les répétitions.
+            if not best or mot_du_francais_ou_de_l_anglais(low):
+                return tok
+            return lowered[best[0]]
 
         return _WORD_RE.sub(fix, text)
