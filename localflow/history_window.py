@@ -51,6 +51,9 @@ W, H = 760.0, 700.0
 STATS_H = 150.0
 M = 28.0
 ROW_H = 66.0
+# Copier, c'est pour coller ailleurs : on laisse juste le temps de voir
+# « Copié », puis la fenêtre s'efface et rend le focus à l'app d'avant.
+FERMETURE_APRES_COPIE_S = 0.45
 # BG a disparu : le fond vient de theme.FOND (le crème du système).
 
 def _fmt_time(iso):
@@ -298,6 +301,13 @@ class HistoryWindow(NSObject):
     @objc.python_method
     def _copy_entry(self, entry):
         copy_text(entry.get("text", ""))
+        self.performSelector_withObject_afterDelay_("closeAfterCopy:", None, FERMETURE_APRES_COPIE_S)
+
+    def closeAfterCopy_(self, _):
+        if self.window is None:
+            return
+        self.list.flash_index = -1   # la prochaine ouverture repart propre
+        self.window.close()
 
     def refresh(self):
         if self.window is None:
