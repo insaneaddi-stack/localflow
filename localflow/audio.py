@@ -59,6 +59,25 @@ def default_input_id():
     except Exception:
         return 0
 
+_BT_HINTS = ("airpods", "beats", "buds", "bluetooth", "wh-1000", "bose", "jabra")
+
+
+def _is_bluetooth(name):
+    return bool(name) and any(h in name.lower() for h in _BT_HINTS)
+
+
+def builtin_input_index():
+    """Index PortAudio du micro intégré du Mac, None s'il n'y en a pas (Mac mini, écran fermé…)."""
+    try:
+        for i, d in enumerate(sd.query_devices()):
+            n = d["name"].lower()
+            if d["max_input_channels"] > 0 and ("macbook" in n or "built-in" in n or "intégré" in n):
+                return i
+    except Exception:
+        pass
+    return None
+
+
 _open_streams = set()
 _pa_lock = threading.Lock()
 
@@ -188,9 +207,14 @@ class Recorder:
                 self._device_name = sd.query_devices(kind="input")["name"]
             except Exception:
                 self._device_name = None
+            # Micro Bluetooth (AirPods…) : l'ouvrir bascule le casque en mode « appel » et dégrade
+            # tout le son du Mac. On dicte alors avec le micro intégré, le casque reste en haute qualité.
+            device = builtin_input_index() if _is_bluetooth(self._device_name) else None
+            if device is not None:
+                self._device_name = sd.query_devices(device)["name"]
             self._stream = open_input_stream(
                 samplerate=SAMPLE_RATE, channels=1, dtype="float32",
-                blocksize=BLOCK, callback=self._callback,
+                blocksize=BLOCK, callback=self._callback, device=device,
             )
             self._last_callback = time.time()
             self._silent_since = 0.0
