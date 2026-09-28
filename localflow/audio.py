@@ -68,6 +68,8 @@ def _is_bluetooth(name):
 
 def builtin_input_index():
     """Index PortAudio du micro intégré du Mac, None s'il n'y en a pas (Mac mini, écran fermé…)."""
+    if lid_closed():
+        return None   # capot fermé : macOS coupe le micro intégré, il ne livrerait que du silence
     try:
         for i, d in enumerate(sd.query_devices()):
             n = d["name"].lower()
@@ -76,6 +78,25 @@ def builtin_input_index():
     except Exception:
         pass
     return None
+
+
+_lid = (0.0, False)
+
+def lid_closed():
+    """Vrai si le capot du MacBook est fermé (écran externe). Mis en cache 5 s : l'appel coûte ~20 ms."""
+    global _lid
+    if time.time() - _lid[0] < 5.0:
+        return _lid[1]
+    closed = False
+    try:
+        import subprocess
+        out = subprocess.run(["ioreg", "-r", "-k", "AppleClamshellState", "-d", "1"],
+                             capture_output=True, text=True, timeout=2).stdout
+        closed = '"AppleClamshellState" = Yes' in out
+    except Exception:
+        pass
+    _lid = (time.time(), closed)
+    return closed
 
 
 _open_streams = set()
@@ -167,6 +188,8 @@ class Recorder:
         self._lock = threading.Lock()
         self._stream = None
         self._device_name = None
+        self.using_builtin = False
+        self._builtin_bad_until = 0.0
         self._ring = np.zeros(int(RING_S * SAMPLE_RATE), dtype=np.float32)
         self._ring_pos = 0
         self._chunks = []
@@ -198,6 +221,8 @@ class Recorder:
 
     def _open_impl(self):
         with self._lock:
+            if self._stream is not None and self.using_builtin and self.muted(0.5):
+                self._builtin_bad_until = time.time() + 300   # micro intégré muet : on repasse au casque
             self._close_stream()
             self._device_id = default_input_id()
             if self._device_id and self._device_id != getattr(self, "_opened_id", None) and getattr(self, "_opened_id", None):
@@ -209,7 +234,11 @@ class Recorder:
                 self._device_name = None
             # Micro Bluetooth (AirPods…) : l'ouvrir bascule le casque en mode « appel » et dégrade
             # tout le son du Mac. On dicte alors avec le micro intégré, le casque reste en haute qualité.
-            device = builtin_input_index() if _is_bluetooth(self._device_name) else None
+            # Repli automatique : si le micro intégré s'est révélé muet, on laisse le casque 5 min.
+            device = None
+            if _is_bluetooth(self._device_name) and time.time() > self._builtin_bad_until:
+                device = builtin_input_index()
+            self.using_builtin = device is not None
             if device is not None:
                 self._device_name = sd.query_devices(device)["name"]
             self._stream = open_input_stream(
