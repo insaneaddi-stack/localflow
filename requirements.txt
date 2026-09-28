@@ -8,3 +8,4 @@ numpy
 pyobjc-framework-ApplicationServices>=10.0
 pillow
 pyobjc-framework-AVFoundation>=10.0
+text2num==3.1.0

@@ -62,7 +62,7 @@ def _looks_broken(text: str, seconds: float) -> str:
 class Transcriber:
     """Qwen3-ASR (MLX) : précis en français, ponctue seul, et accepte un contexte
     de vocabulaire (dictionnaire perso + corrections apprises). Deuxième passe
-    automatique si la sortie semble tronquée ou partie en boucle."""
+    automatique, avec un budget de jetons élargi, si le décodage a été tronqué."""
 
     def __init__(self, model_id: str = MODEL_ID):
         from mlx_qwen3_asr import Session
@@ -83,11 +83,12 @@ class Transcriber:
             max_new_tokens=max_new_tokens,
         )
         text = (result.text or "").strip()
+        truncated = bool(getattr(result, "truncated", False))
         if len(text.split()) <= 4 and _is_hallucination(text):
-            return ""
+            return "", truncated
         if context and _recites_context(text, context):
-            return ""
-        return text
+            return "", truncated
+        return text, truncated
 
     def transcribe(self, audio: np.ndarray, prompt: str = "", language: str = "") -> str:
         """language : 'fr'/'en' pour figer la langue (réunions), sinon détection automatique."""
@@ -96,10 +97,15 @@ class Transcriber:
         lang = language if language in ALLOWED_LANGS else None
         context = _as_context(prompt)
 
-        text = self._decode(pcm, lang, context)
-        reason = _looks_broken(text, seconds) if seconds >= 1.0 else ""
-        if reason:
-            retry = self._decode(pcm, lang, context, max_new_tokens=RETRY_MAX_TOKENS)
+        text, truncated = self._decode(pcm, lang, context)
+        # Le décodage est glouton, donc déterministe : tant que le budget de jetons
+        # n'a pas été atteint, une 2e passe ressort le même texte au mot près.
+        # Mesuré (sept. 2026) : la relancer sur « répétition en boucle » doublait
+        # le temps de 13 % des dictées de 80-150 mots et de toutes celles de 300+
+        # (un 3-gramme comme « est-ce que » revient forcément trois fois), pour rien.
+        if truncated:
+            reason = _looks_broken(text, seconds) or "budget de jetons atteint"
+            retry, _ = self._decode(pcm, lang, context, max_new_tokens=RETRY_MAX_TOKENS)
             self.last_retry = reason
             if len(retry.split()) >= len(text.split()):
                 text = retry

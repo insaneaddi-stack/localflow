@@ -12,7 +12,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from localflow.cleanup import _guard_ok, _vocab_keys, cleanup_rules
+from localflow.cleanup import _guard_ok, _vocab_keys, cleanup_rules, to_digits
 
 
 class Hesitations(unittest.TestCase):
@@ -48,7 +48,7 @@ class NeverTouch(unittest.TestCase):
         "Tu viens, hein ?",
         "Il y a plus plus de monde que prévu",
         "On y va peut-être demain",
-        "Je te rappelle tout de suite, c'est-à-dire dans cinq minutes",
+        "Je te rappelle tout de suite, c'est-à-dire dans 5 minutes",
         "Non mais attends, je crois qu'on s'est mal compris sur ce point",
         "En fait je pense qu'on devrait attendre un peu",
         "Il m'a dit non, non et non",
@@ -93,7 +93,7 @@ class Retakes(unittest.TestCase):
         ("il faut valider le budget, je veux dire il faut valider le budget final",
          "Il faut valider le budget final"),
         ("le rendez-vous est à trois heures, non plutôt le rendez-vous est à quatre heures",
-         "Le rendez-vous est à quatre heures"),
+         "Le rendez-vous est à 4 heures"),
         ("je pars lundi en fait je pars mardi", "Je pars mardi"),
         ("il faut relancer le client, enfin non il faut relancer le client demain",
          "Il faut relancer le client demain"),
@@ -228,12 +228,28 @@ class Performance(unittest.TestCase):
         self.assertLess(ms, 5.0, f"{ms:.2f} ms par appel, budget 5 ms")
 
     def test_no_words_invented(self):
-        """Le moteur ne fait que supprimer : jamais un mot qui n'était pas dans la source."""
+        """Le moteur ne fait que supprimer (hormis les nombres mis en chiffres)."""
         import re
-        src = set(re.findall(r"\w+", self.LONG.lower()))
+        src = set(re.findall(r"\w+", to_digits(self.LONG).lower()))
         out = set(re.findall(r"\w+", cleanup_rules(self.LONG).lower()))
         self.assertTrue(out <= src, out - src)
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Nombres(unittest.TestCase):
+    CASES = [
+        ("J'ai vingt-trois ans et un chat", "J'ai 23 ans et un chat"),
+        ("Rendez-vous à quatorze heures trente", "Rendez-vous à 14 heures 30"),
+        ("Ça coûte deux cent cinquante euros", "Ça coûte 250 euros"),
+        ("Quinze pour cent des gens", "15 % des gens"),
+        ("I have twenty three apples and it costs five cents", "I have 23 apples and it costs 5 cents"),
+        ("J'ai un vélo neuf", "J'ai un vélo neuf"),
+        ("Le troisième point", "Le 3e point"),
+    ]
+
+    def test_cases(self):
+        for raw, want in self.CASES:
+            self.assertEqual(cleanup_rules(raw), want, msg=raw)

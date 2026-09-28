@@ -28,7 +28,10 @@ SYSTEM_PROMPT = (
     "Tu nettoies des transcriptions de dictée vocale (français ou anglais). "
     "Supprime toutes les hésitations (euh, hum, um, uh...), les faux départs, "
     "les tics de langage inutiles et les mots répétés par erreur. "
-    "Corrige la ponctuation. Garde tous les autres mots exactement tels quels : "
+    "Corrige la ponctuation. Mets en page selon le contenu : si la dictée énumère "
+    "plusieurs éléments (courses, étapes, points, options), fais une liste à puces "
+    "« - », un élément par ligne, après sa phrase d'introduction ; sinon garde des "
+    "paragraphes normaux. Garde tous les autres mots exactement tels quels : "
     "ne reformule pas, ne traduis pas, ne réponds jamais au contenu. "
     "Réponds uniquement avec le texte nettoyé, rien d'autre."
 )
@@ -61,8 +64,17 @@ FEW_SHOT = [
     (
         "Ok donc euh premier point on valide le budget. Euh deuxième point il faut "
         "que que je rappelle le client. Et euh voilà on fait le point vendredi",
-        "Ok donc premier point, on valide le budget. Deuxième point, il faut que je "
-        "rappelle le client. Et voilà, on fait le point vendredi.",
+        "Ok donc :\n- Premier point, on valide le budget.\n- Deuxième point, il faut "
+        "que je rappelle le client.\n\nEt voilà, on fait le point vendredi.",
+    ),
+    (
+        "Alors la procédure c'est d'abord tu ouvres le fichier ensuite tu le signes et enfin tu me le renvoies",
+        "Alors la procédure c'est :\n- d'abord, tu ouvres le fichier ;\n- ensuite, tu le signes ;\n"
+        "- et enfin, tu me le renvoies.",
+    ),
+    (
+        "Pour ce soir il faut acheter du pain des œufs euh du lait et du beurre",
+        "Pour ce soir, il faut acheter :\n- du pain\n- des œufs\n- du lait\n- du beurre",
     ),
 ]
 
@@ -345,8 +357,30 @@ def _pipeline(text: str, aggressive: bool):
     return _polish("".join(w + t for w, t in chunks)), (fuzzy, total)
 
 
+_EN_HINTS = {"the", "and", "is", "are", "you", "to", "of", "it", "have", "with", "for", "this", "that", "we", "i"}
+_FR_HINTS = {"le", "la", "les", "et", "est", "je", "tu", "de", "des", "un", "une", "pour", "que", "on", "il", "ca"}
+
+
+def to_digits(text: str) -> str:
+    """« vingt-trois » → « 23 », « quinze pour cent » → « 15 % ».
+
+    Les petits nombres isolés (« un chat », « deux fois ») restent en lettres :
+    text2num ne les convertit pas, ce qui évite de casser les articles.
+    """
+    try:
+        from text_to_num import alpha2digit
+    except ImportError:   # installation antérieure sans text2num : on ne touche à rien
+        return text
+    keys = [_key(w) for w in _WORD_RE.findall(text)]
+    # Une seule langue par dictée : en français « cent », en anglais « cents »
+    # ne veulent pas dire la même chose.
+    lang = "en" if sum(k in _EN_HINTS for k in keys) > sum(k in _FR_HINTS for k in keys) else "fr"
+    out = re.sub(r"(\d)ème\b", r"\1e", alpha2digit(text, lang))   # « 3ème » → « 3e »
+    return re.sub(r"(\d)\s*(?:pour 100|percent|per cent)\b", r"\1 %" if lang == "fr" else r"\1%", out)
+
+
 def cleanup_rules(text: str) -> str:
-    """Nettoyage déterministe du texte dicté (~1 ms). Ne supprime, ne réécrit jamais."""
+    """Nettoyage déterministe du texte dicté (~1 ms). Ne réécrit rien, hormis les nombres en chiffres."""
     text = (text or "").strip()
     if not text:
         return ""
@@ -356,8 +390,8 @@ def cleanup_rules(text: str) -> str:
     # budget : une seule (8 mots au plus) passe toujours, mais une règle qui
     # s'emballe sur un long texte fait repasser le tout en conservateur.
     if total and fuzzy > max(_MAX_RUN, 0.35 * total):
-        return _pipeline(text, aggressive=False)[0]
-    return out
+        out = _pipeline(text, aggressive=False)[0]
+    return to_digits(out)
 
 
 # --------------------------------------------------------------- passe IA ----
@@ -406,7 +440,7 @@ def _guard_ok(output: str, source: str, allowed: set) -> bool:
                 continue
             prev = src[i1 - 1] if i1 else ""
             nxt = src[i2] if i2 < len(src) else ""
-            if not all(_removable(w, prev, nxt) for w in src[i1:i2]):
+            if not all(w in allowed or _removable(w, prev, nxt) for w in src[i1:i2]):
                 return False
         else:  # replace
             a, b = src[i1:i2], out[j1:j2]
@@ -493,10 +527,13 @@ class Cleaner:
 
             if "</think>" in output:
                 output = output.split("</think>")[-1].strip()
+            output = to_digits(output)   # le LLM remet volontiers les nombres en lettres
 
             # Garde-fous : sortie vide, taille aberrante, ou mots inventés
             # (le LLM ne doit jamais introduire de mot absent de la dictée)
             allowed = _vocab_keys(vocab)
+            if "\n- " in output:   # une liste à puces remplace les « et » de l'énumération
+                allowed |= {"et", "and", "puis", "then"}
             if (
                 not output
                 or len(output) > int(1.5 * len(text)) + 40

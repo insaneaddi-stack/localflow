@@ -10,6 +10,7 @@ import faulthandler
 import fcntl
 import os
 import queue
+import re
 import signal
 import subprocess
 import sys
@@ -1133,7 +1134,8 @@ class LocalFlowApp(rumps.App):
                 _log("commande vocale : annulation (Cmd+Z)")
             elif text:
                 if should_type(bundle):
-                    type_text(text)
+                    # Terminal : un retour à la ligne tapé = Entrée = commande lancée.
+                    type_text(re.sub(r"\s*\n+(?:- )?", " ", text))
                     how = "tapé"
                 else:
                     paste_text(text)
