@@ -59,6 +59,46 @@ def default_input_id():
     except Exception:
         return 0
 
+def keep_headset_mic_off():
+    """Casque Bluetooth devenu micro par défaut (macOS le fait à chaque connexion) → on remet le
+    micro intégré par défaut. Sinon la première app qui ouvre le micro (Chrome, Slack, nous…)
+    bascule le casque en mode appel et tout le son du Mac devient celui d'un coup de fil.
+    Capot fermé : on ne touche à rien, le casque est alors le seul micro. Renvoie True si basculé."""
+    import ctypes
+    try:
+        default_input_id()   # charge _ca
+
+        class Addr(ctypes.Structure):
+            _fields_ = [("sel", ctypes.c_uint32), ("scope", ctypes.c_uint32), ("elem", ctypes.c_uint32)]
+
+        fc = lambda s: int.from_bytes(s.encode(), "big")
+
+        def u32(obj, sel, scope="glob"):
+            v, size = ctypes.c_uint32(0), ctypes.c_uint32(4)
+            a = Addr(fc(sel), fc(scope), 0)
+            ok = _ca.AudioObjectGetPropertyData(obj, ctypes.byref(a), 0, None, ctypes.byref(size), ctypes.byref(v)) == 0
+            return v.value if ok else None
+
+        cur = default_input_id()
+        if u32(cur, "tran") not in (fc("blue"), fc("blea")) or lid_closed():
+            return False
+        a, size = Addr(fc("dev#"), fc("glob"), 0), ctypes.c_uint32(0)
+        _ca.AudioObjectGetPropertyDataSize(1, ctypes.byref(a), 0, None, ctypes.byref(size))
+        ids = (ctypes.c_uint32 * (size.value // 4))()
+        _ca.AudioObjectGetPropertyData(1, ctypes.byref(a), 0, None, ctypes.byref(size), ids)
+        for d in ids:
+            s = Addr(fc("stm#"), fc("inpt"), 0)
+            n = ctypes.c_uint32(0)
+            _ca.AudioObjectGetPropertyDataSize(d, ctypes.byref(s), 0, None, ctypes.byref(n))
+            if n.value and u32(d, "tran") == fc("bltn"):
+                v = ctypes.c_uint32(d)
+                a = Addr(fc("dIn "), fc("glob"), 0)
+                return _ca.AudioObjectSetPropertyData(1, ctypes.byref(a), 0, None, 4, ctypes.byref(v)) == 0
+    except Exception:
+        pass
+    return False
+
+
 _BT_HINTS = ("airpods", "beats", "buds", "bluetooth", "wh-1000", "bose", "jabra")
 
 

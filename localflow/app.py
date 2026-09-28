@@ -22,7 +22,7 @@ import numpy as np
 import rumps
 from AppKit import NSApp, NSImage, NSOperationQueue
 
-from .audio import SAMPLE_RATE, Recorder, audio_stuck
+from .audio import SAMPLE_RATE, Recorder, audio_stuck, keep_headset_mic_off
 from . import theme
 from . import timetree
 from .calendar_intent import CalendarIntent
@@ -77,6 +77,7 @@ HEALTH_EVERY_S = 2
 MIC_LINGER_S = 15        # micro gardé ouvert après une dictée (enchaînements sans latence), puis fermé
 STALE_UI_S = 8       # overlay/icône restés bloqués sans enregistrement ni traitement
 KEEP_WARM_S = 30     # au repos : micro-inférence périodique pour que macOS ne swappe pas le modèle
+KEEP_WARM_WIRED_S = 600   # modèle verrouillé en mémoire : simple sonde, qui logue si ça ralentit encore
 # Un seuil ABSOLU criait au loup : une dictée de 45 s met légitimement 5 s à
 # décoder. Mesuré sur 943 dictées, les lignes « LENT » avaient un meilleur
 # rapport temps/audio (0,125) que les normales (0,158) — 115 fausses alertes
@@ -573,6 +574,10 @@ class LocalFlowApp(rumps.App):
 
         _on_main(ready)
         _log(f"démarrage: moteur {self.transcriber.name} chargé, prêt")
+        wired = getattr(self.transcriber, "wired", 0)
+        _log(f"mémoire: modèle verrouillé ({wired / 2**30:.1f} Go), plus de swap possible" if wired
+             else "mémoire: verrouillage impossible, keep-warm toutes les 30 s")
+        keep_warm_s = KEEP_WARM_WIRED_S if wired else KEEP_WARM_S
         try:
             os.remove(CRASH_FILE)      # démarrage réussi : l'ardoise est effacée
         except OSError:
@@ -586,7 +591,7 @@ class LocalFlowApp(rumps.App):
         while True:
             try:
                 try:
-                    kind, payload = self._jobs.get(timeout=KEEP_WARM_S)
+                    kind, payload = self._jobs.get(timeout=keep_warm_s)
                 except queue.Empty:
                     self._keep_warm()
                     continue
@@ -812,6 +817,8 @@ class LocalFlowApp(rumps.App):
                 self._suppress_next_release = True
                 self._finish_recording()  # on TERMINE : le texte de l'utilisateur n'est pas jeté
             if not self.recorder.recording:
+                if not self.meeting_rec.active and keep_headset_mic_off():
+                    _log("micro par défaut : casque Bluetooth → micro du Mac (le casque reste en haute qualité)")
                 if self.recorder.open_ and self.recorder.muted(2.0) \
                         and time.time() - getattr(self, "_mute_reopen_t", 0.0) > 10.0:
                     self._mute_reopen_t = time.time()
