@@ -59,86 +59,6 @@ def default_input_id():
     except Exception:
         return 0
 
-def keep_headset_mic_off():
-    """Casque Bluetooth devenu micro par défaut (macOS le fait à chaque connexion) → on remet le
-    micro intégré par défaut. Sinon la première app qui ouvre le micro (Chrome, Slack, nous…)
-    bascule le casque en mode appel et tout le son du Mac devient celui d'un coup de fil.
-    Capot fermé : on ne touche à rien, le casque est alors le seul micro. Renvoie True si basculé."""
-    import ctypes
-    try:
-        default_input_id()   # charge _ca
-
-        class Addr(ctypes.Structure):
-            _fields_ = [("sel", ctypes.c_uint32), ("scope", ctypes.c_uint32), ("elem", ctypes.c_uint32)]
-
-        fc = lambda s: int.from_bytes(s.encode(), "big")
-
-        def u32(obj, sel, scope="glob"):
-            v, size = ctypes.c_uint32(0), ctypes.c_uint32(4)
-            a = Addr(fc(sel), fc(scope), 0)
-            ok = _ca.AudioObjectGetPropertyData(obj, ctypes.byref(a), 0, None, ctypes.byref(size), ctypes.byref(v)) == 0
-            return v.value if ok else None
-
-        cur = default_input_id()
-        if u32(cur, "tran") not in (fc("blue"), fc("blea")) or lid_closed():
-            return False
-        a, size = Addr(fc("dev#"), fc("glob"), 0), ctypes.c_uint32(0)
-        _ca.AudioObjectGetPropertyDataSize(1, ctypes.byref(a), 0, None, ctypes.byref(size))
-        ids = (ctypes.c_uint32 * (size.value // 4))()
-        _ca.AudioObjectGetPropertyData(1, ctypes.byref(a), 0, None, ctypes.byref(size), ids)
-        for d in ids:
-            s = Addr(fc("stm#"), fc("inpt"), 0)
-            n = ctypes.c_uint32(0)
-            _ca.AudioObjectGetPropertyDataSize(d, ctypes.byref(s), 0, None, ctypes.byref(n))
-            if n.value and u32(d, "tran") == fc("bltn"):
-                v = ctypes.c_uint32(d)
-                a = Addr(fc("dIn "), fc("glob"), 0)
-                return _ca.AudioObjectSetPropertyData(1, ctypes.byref(a), 0, None, 4, ctypes.byref(v)) == 0
-    except Exception:
-        pass
-    return False
-
-
-_BT_HINTS = ("airpods", "beats", "buds", "bluetooth", "wh-1000", "bose", "jabra")
-
-
-def _is_bluetooth(name):
-    return bool(name) and any(h in name.lower() for h in _BT_HINTS)
-
-
-def builtin_input_index():
-    """Index PortAudio du micro intégré du Mac, None s'il n'y en a pas (Mac mini, écran fermé…)."""
-    if lid_closed():
-        return None   # capot fermé : macOS coupe le micro intégré, il ne livrerait que du silence
-    try:
-        for i, d in enumerate(sd.query_devices()):
-            n = d["name"].lower()
-            if d["max_input_channels"] > 0 and ("macbook" in n or "built-in" in n or "intégré" in n):
-                return i
-    except Exception:
-        pass
-    return None
-
-
-_lid = (0.0, False)
-
-def lid_closed():
-    """Vrai si le capot du MacBook est fermé (écran externe). Mis en cache 5 s : l'appel coûte ~20 ms."""
-    global _lid
-    if time.time() - _lid[0] < 5.0:
-        return _lid[1]
-    closed = False
-    try:
-        import subprocess
-        out = subprocess.run(["ioreg", "-r", "-k", "AppleClamshellState", "-d", "1"],
-                             capture_output=True, text=True, timeout=2).stdout
-        closed = '"AppleClamshellState" = Yes' in out
-    except Exception:
-        pass
-    _lid = (time.time(), closed)
-    return closed
-
-
 _open_streams = set()
 _pa_lock = threading.Lock()
 
@@ -228,8 +148,6 @@ class Recorder:
         self._lock = threading.Lock()
         self._stream = None
         self._device_name = None
-        self.using_builtin = False
-        self._builtin_bad_until = 0.0
         self._ring = np.zeros(int(RING_S * SAMPLE_RATE), dtype=np.float32)
         self._ring_pos = 0
         self._chunks = []
@@ -261,8 +179,6 @@ class Recorder:
 
     def _open_impl(self):
         with self._lock:
-            if self._stream is not None and self.using_builtin and self.muted(0.5):
-                self._builtin_bad_until = time.time() + 300   # micro intégré muet : on repasse au casque
             self._close_stream()
             self._device_id = default_input_id()
             if self._device_id and self._device_id != getattr(self, "_opened_id", None) and getattr(self, "_opened_id", None):
@@ -272,18 +188,9 @@ class Recorder:
                 self._device_name = sd.query_devices(kind="input")["name"]
             except Exception:
                 self._device_name = None
-            # Micro Bluetooth (AirPods…) : l'ouvrir bascule le casque en mode « appel » et dégrade
-            # tout le son du Mac. On dicte alors avec le micro intégré, le casque reste en haute qualité.
-            # Repli automatique : si le micro intégré s'est révélé muet, on laisse le casque 5 min.
-            device = None
-            if _is_bluetooth(self._device_name) and time.time() > self._builtin_bad_until:
-                device = builtin_input_index()
-            self.using_builtin = device is not None
-            if device is not None:
-                self._device_name = sd.query_devices(device)["name"]
             self._stream = open_input_stream(
                 samplerate=SAMPLE_RATE, channels=1, dtype="float32",
-                blocksize=BLOCK, callback=self._callback, device=device,
+                blocksize=BLOCK, callback=self._callback,
             )
             self._last_callback = time.time()
             self._silent_since = 0.0

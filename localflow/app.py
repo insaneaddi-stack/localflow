@@ -22,7 +22,7 @@ import numpy as np
 import rumps
 from AppKit import NSApp, NSImage, NSOperationQueue
 
-from .audio import SAMPLE_RATE, Recorder, audio_stuck, keep_headset_mic_off
+from .audio import SAMPLE_RATE, Recorder, audio_stuck
 from . import theme
 from . import timetree
 from .calendar_intent import CalendarIntent
@@ -817,8 +817,6 @@ class LocalFlowApp(rumps.App):
                 self._suppress_next_release = True
                 self._finish_recording()  # on TERMINE : le texte de l'utilisateur n'est pas jeté
             if not self.recorder.recording:
-                if not self.meeting_rec.active and keep_headset_mic_off():
-                    _log("micro par défaut : casque Bluetooth → micro du Mac (le casque reste en haute qualité)")
                 if self.recorder.open_ and self.recorder.muted(2.0) \
                         and time.time() - getattr(self, "_mute_reopen_t", 0.0) > 10.0:
                     self._mute_reopen_t = time.time()
@@ -890,9 +888,6 @@ class LocalFlowApp(rumps.App):
             self.recorder.start(live=live)
             if self.recorder.last_reopen:
                 _log(f"micro rouvert avant la dictée : {self.recorder.last_reopen}")
-            if self.recorder._device_name != getattr(self, "_logged_mic", None):
-                self._logged_mic = self.recorder._device_name
-                _log(f"micro utilisé : {self._logged_mic}")
         except Exception as exc:
             _log("échec ouverture micro:\n" + traceback.format_exc())
             _notify("Micro indisponible", str(exc))
