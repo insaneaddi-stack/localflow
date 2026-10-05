@@ -60,7 +60,7 @@ HOVER_W, HOVER_H = 168.0, 26.0  # au survol on affiche vraiment quoi faire, d'o�
 PILL_W, PILL_H = 184.0, 36.0
 PROC_W, PROC_H = 184.0, 36.0    # même largeur que l'enregistrement : pas d'à-coup entre les deux
 WAVE_COUNT, WAVE_W, WAVE_GAP = 20, 2.5, 2.6   # mini-forme d'onde défilante
-PANEL_W, PANEL_H = 820.0, 256.0
+PANEL_W, PANEL_H = 840.0, 316.0
 MEET_W, MEET_H = 118.0, 22.0          # réunion en cours : point rouge + chrono
 OFFER_W, OFFER_H = 452.0, 44.0        # « Appel X détecté » + [Enregistrer] [Ignorer]
 CAL_W, CAL_H = 560.0, 44.0            # aperçu agenda : « Demain 14:00 · Titre » + décompte
@@ -833,50 +833,154 @@ class _BandView(NSView):
                    _attrs(11.0, ka, color=theme.ns(theme.O_PETIT if copied else theme.ENCRE_3, ka)))
 
     @objc.python_method
+    def _draw_action(self, rect, tile, idx, ka, hovered):
+        """Action compacte : icône, libellé, état, touche clavier — une ligne de commande."""
+        on = tile.get("on", True)
+        ov = self.overlay
+        copied = ov.flash_index == idx and time.time() - ov.flash_t0 < 1.2
+        x, y, w, h = rect.origin.x, rect.origin.y, rect.size.width, rect.size.height
+        path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(rect, theme.RAYON_CARTE, theme.RAYON_CARTE)
+        theme.ns(theme.CARTE if hovered else theme.FOND_PUR, ka).setFill()
+        path.fill()
+        theme.ns(theme.O_PETIT if copied else (theme.TRAIT_FORT if hovered else theme.TRAIT), ka).setStroke()
+        path.setLineWidth_(theme.FILET * (2.0 if copied else 1.0))
+        path.stroke()
+        icon = tile.get("icon")
+        if icon:
+            img = self._symbol(icon, 16, 1.0)
+            if img is not None:
+                sz = img.size()
+                self._draw_symbol(icon, x + 14, y + (h - sz.height) / 2.0, 16, (0.9 if on else 0.32) * ka)
+        tx = x + 40
+        _draw_text(tile["title"], NSMakeRect(tx, y + h / 2.0 + 0.5, w - 40 - 34, 17),
+                   _attrs(12.5, ka, weight=650, color=theme.ns(theme.ENCRE if on else theme.ENCRE_3, ka)))
+        sub = "Copié ✓" if copied else tile.get("subtitle", "")
+        _draw_text(sub, NSMakeRect(tx, y + h / 2.0 - 15.5, w - 40 - 34, 14),
+                   _attrs(10.5, ka, color=theme.ns(theme.O_PETIT if copied else theme.ENCRE_3, ka)))
+        key = str(idx + 1)
+        kr = NSMakeRect(x + w - 12 - 18, y + (h - 18) / 2.0, 18, 18)
+        kp = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(kr, 4.5, 4.5)
+        theme.ns(theme.TRAIT_FORT if hovered else theme.TRAIT, ka).setStroke()
+        kp.setLineWidth_(theme.FILET)
+        kp.stroke()
+        kat = _attrs(10.0, ka, weight=600, truncate=False, color=theme.ns(theme.ENCRE_3, ka))
+        kw = _text_width(key, kat)
+        _draw_text(key, NSMakeRect(kr.origin.x + (18 - kw) / 2.0, kr.origin.y + 2.5, kw + 2, 13), kat)
+
+    @objc.python_method
     def _draw_panel(self, panel, k):
+        """Tableau de bord : le jour en grand, la semaine en barres, la dernière dictée
+        en citation, puis les actions en une rangée. Tout se lit en une seconde."""
         ov = self.overlay
         data = ov.data()
         px, py, pw, ph = panel.origin.x, panel.origin.y, panel.size.width, panel.size.height
-        M = 24.0
-        x0 = px + M
-        inner_w = pw - 2 * M
-        top = py + ph
+        M = 26.0
+        x0, inner_w, top = px + M, pw - 2 * M, py + ph
+        stagger = lambda i: max(0.0, min(1.0, (k - 0.08 * i) / 0.6))
+        rise = lambda a: (1.0 - (1.0 - (1.0 - a) ** 3)) * 14.0
 
-        # Le verrou de marque : le logotype AUR'IA, puis FLOW à la même hauteur de
-        # capitale. « Le mot » est la forme par défaut d'un en-tête ; le produit
-        # dérivé s'accroche derrière plutôt que de refaire un dessin.
+        # ---- en-tête : logotype + puce d'état
         lw = self._draw_lockup(x0, top - M - 16, 15.0, k)
         status = data.get("status", "")
         if status:
-            sx = x0 + lw + 12
-            _draw_text(status, NSMakeRect(sx, top - M - 17, inner_w - (sx - x0) - 60, 18),
-                       _attrs(11.5, 0.42 * k))
-        _draw_text(data.get("stats_line", ""), NSMakeRect(x0, top - M - 36, inner_w - 80, 14), _attrs(11, 0.55 * k))
+            sa = _attrs(11.0, 0.9 * k, weight=500, truncate=False, color=_encre2(0.9 * k))
+            sw = _text_width(status, sa)
+            chip = NSMakeRect(x0 + lw + 14, top - M - 20, sw + 30, 22)
+            cp = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(chip, 11, 11)
+            theme.ns(theme.CARTE, k).setFill()
+            cp.fill()
+            _orange(0.95 * k).setFill()
+            NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(chip.origin.x + 11, chip.origin.y + 8, 6, 6)).fill()
+            _draw_text(status, NSMakeRect(chip.origin.x + 22, chip.origin.y + 4, sw + 4, 15), sa)
 
+        # ---- zone haute : trois colonnes
+        ctop = top - M - 46.0
+        cbot = py + 34.0 + 58.0 + 22.0
+        ch_ = ctop - cbot
+        today = data.get("today") or {}
+        week = data.get("week") or []
+        last = data.get("last") or {}
+
+        # colonne 1 : aujourd'hui
+        a = stagger(0); dy = rise(a)
+        cap = _attrs(10.0, a, weight=650, truncate=False, color=theme.ns(theme.ENCRE_3, a))
+        _draw_text("AUJOURD’HUI", NSMakeRect(x0, ctop - 14 - dy, 160, 13), cap)
+        words = f"{today.get('words', 0):,}".replace(",", "\u202f")
+        na = _attrs(40.0, a, weight=500, truncate=False, serif=True, color=_encre(a))
+        nw = _text_width(words, na)
+        _draw_text(words, NSMakeRect(x0 - 1, ctop - 66 - dy, nw + 4, 50), na)
+        _draw_text("mots", NSMakeRect(x0 + nw + 8, ctop - 51 - dy, 60, 18),
+                   _attrs(13.0, a, weight=500, truncate=False, color=_encre2(a)))
+        _draw_text(f"{today.get('dictations', 0)} dictées", NSMakeRect(x0, ctop - 82 - dy, 200, 16),
+                   _attrs(12.0, a, color=_encre2(a)))
+        _draw_text(f"≈ {today.get('saved_min', 0):.0f} min gagnées", NSMakeRect(x0, ctop - 100 - dy, 200, 16),
+                   _attrs(12.0, a, weight=600, color=theme.ns(theme.O_PETIT, a)))
+
+        # colonne 2 : 7 jours
+        a = stagger(1); dy = rise(a)
+        cx = x0 + 214.0
+        _draw_text("7 JOURS", NSMakeRect(cx, ctop - 14 - dy, 120, 13), cap)
+        if week:
+            mx = max(1, max(wd for _, wd, _ in week))
+            bw, gap, hmax = 16.0, 10.0, ch_ - 44.0
+            base = cbot + 18.0 - dy
+            for i, (lab, wd, is_today) in enumerate(week):
+                bx = cx + i * (bw + gap)
+                hh = max(3.0, hmax * (wd / mx) * a)
+                (_orange(0.95 * a) if is_today else _encre(0.16 * a)).setFill()
+                NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(bx, base, bw, hh), 3.0, 3.0).fill()
+                la = _attrs(10.0, a, weight=600 if is_today else 400, truncate=False,
+                            color=theme.ns(theme.O_PETIT if is_today else theme.ENCRE_3, a))
+                lw_ = _text_width(lab, la)
+                _draw_text(lab, NSMakeRect(bx + (bw - lw_) / 2.0, base - 17, lw_ + 2, 13), la)
+
+        # colonne 3 : dernière dictée (cliquable → copier)
+        a = stagger(2); dy = rise(a)
+        lx = x0 + 214.0 + 7 * 26.0 + 24.0
+        card = NSMakeRect(lx, cbot - 4 - dy, x0 + inner_w - lx, ch_ + 4)
+        hovered = self.hover_pt is not None and NSPointInRect(self.hover_pt, card)
+        cpth = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(card, theme.RAYON_CARTE, theme.RAYON_CARTE)
+        theme.ns(theme.CARTE if hovered else theme.FOND_PUR, a).setFill()
+        cpth.fill()
+        theme.ns(theme.TRAIT_FORT if hovered else theme.TRAIT, a).setStroke()
+        cpth.setLineWidth_(theme.FILET)
+        cpth.stroke()
+        cx3, cw3 = card.origin.x + 16, card.size.width - 32
+        _draw_text("DERNIÈRE DICTÉE", NSMakeRect(cx3, card.origin.y + card.size.height - 26, cw3, 13), cap)
+        text = (last.get("text") or "Rien pour l’instant — maintiens fn et parle.").strip()
+        if len(text) > 150:
+            text = text[:147].rsplit(" ", 1)[0] + "…"
+        _draw_text(f"« {text} »", NSMakeRect(cx3, card.origin.y + 34, cw3, card.size.height - 66),
+                   _attrs(14.0, a, truncate=False, serif=True, italic=True, color=_encre(a)))
+        meta = " · ".join(v for v in (last.get("app"), last.get("when")) if v)
+        _draw_text(meta, NSMakeRect(cx3, card.origin.y + 12, cw3 - 70, 14), _attrs(10.5, a, color=theme.ns(theme.ENCRE_3, a)))
+        if last.get("text"):
+            ha = _attrs(10.5, a, weight=600, truncate=False,
+                        color=theme.ns(theme.O_PETIT if hovered else theme.ENCRE_3, a))
+            hint = "Copier ⏎" if not hovered else "Cliquer pour copier"
+            hw = _text_width(hint, ha)
+            _draw_text(hint, NSMakeRect(card.origin.x + card.size.width - 16 - hw, card.origin.y + 12, hw + 2, 14), ha)
+            if not getattr(self, "_ghost", False):
+                self.hit_zones.append((NSMakeRect(lx, cbot - 4, card.size.width, ch_ + 4), "copy_last", None))
+
+        # ---- rangée d'actions
         tiles = data.get("tiles", [])
-        gap = 14.0
+        gap = 10.0
         n = max(1, len(tiles))
         tw = (inner_w - gap * (n - 1)) / n
-        th = ph - M - 56.0 - 40.0
-        ty = py + 36.0
+        th, ty = 58.0, py + 34.0
         for i, tile in enumerate(tiles):
-            ka = max(0.0, min(1.0, (k - 0.10 * i) / 0.6))
-            # Les tuiles ne faisaient que se fondre, en décalé. Elles montent aussi
-            # maintenant : 22 px en ease-out, ce qui donne au panneau une direction —
-            # un fondu seul se lit comme une image qui charge, pas comme une ouverture.
-            dy = (1.0 - (1.0 - (1.0 - ka) ** 3)) * 22.0
-            rect = NSMakeRect(x0 + i * (tw + gap), ty - dy, tw, th)
+            ka = stagger(3 + 0.5 * i)
+            rect = NSMakeRect(x0 + i * (tw + gap), ty - rise(ka), tw, th)
             hovered = self.hover_pt is not None and NSPointInRect(self.hover_pt, rect)
-            self._draw_tile(rect, tile, i, ka, hovered)
+            self._draw_action(rect, tile, i, ka, hovered)
             if not getattr(self, "_ghost", False):
-                # zone cliquable posée à l'arrivée, pas sur la position transitoire
-                self.hit_zones.append((NSMakeRect(x0 + i * (tw + gap), ty, tw, th),
-                                       tile["action"], tile.get("payload")))
+                self.hit_zones.append((NSMakeRect(x0 + i * (tw + gap), ty, tw, th), tile["action"], tile.get("payload")))
 
-        hint = "1–5   ·   esc   ·   fn × 3 masque la bulle"
-        ha = _attrs(10.5, 0.28 * k, weight=0.4)
+        hint = "1–5   ·   ⏎ copier   ·   esc   ·   fn × 3 masque la bulle"
+        ha = _attrs(10.5, 0.30 * k, weight=0.4)
         hw = _text_width(hint, ha)
-        _draw_text(hint, NSMakeRect(px + pw - M - hw, py + 12, hw + 2, 14), ha)
+        _draw_text(hint, NSMakeRect(px + pw - M - hw, py + 11, hw + 2, 14), ha)
 
 class Overlay:
     """Fenêtre sans bordure, non-activante, sur tous les Spaces."""

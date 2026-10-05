@@ -797,6 +797,9 @@ class LocalFlowApp(rumps.App):
             return False
         if self.overlay.state != "expanded":
             return False
+        if keycode in (36, 76):   # ⏎ : copier la dernière dictée
+            _on_main(lambda: self.overlay._action("copy_last", None))
+            return True
         idx = {18: 0, 19: 1, 20: 2, 21: 3, 23: 4}.get(keycode)  # touches 1-5 (position physique)
         if idx is not None:
             def act():
@@ -1387,7 +1390,17 @@ class LocalFlowApp(rumps.App):
         t = self.config.stats_summary()["today"]
         hist = self.config.history
         last = hist[0]["text"] if hist else ""
+        stats = self.config.data.get("stats", {})
+        jours = "LMMJVSD"
+        week = []
+        for back in range(6, -1, -1):
+            d = _dt.date.today() - _dt.timedelta(days=back)
+            week.append((jours[d.weekday()], stats.get(d.isoformat(), {}).get("words", 0), back == 0))
+        h0 = hist[0] if hist else {}
         return {
+            "today": t,
+            "week": week,
+            "last": {"text": last, "app": h0.get("app", ""), "when": when(h0["t"]) if h0.get("t") else ""},
             "status": "Prêt · Qwen3-ASR" if self.transcriber is not None else "Chargement…",
             "icon": ICON_PATH,
             "tiles": [
