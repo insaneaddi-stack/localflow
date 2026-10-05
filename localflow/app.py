@@ -1419,7 +1419,7 @@ class LocalFlowApp(rumps.App):
             "week": week,
             "avg_words": avg_words,
             "last": {"text": last, "app": h0.get("app", ""), "when": when(h0["t"]) if h0.get("t") else ""},
-            "status": "Prêt · Qwen3-ASR" if self.transcriber is not None else "Chargement…",
+            "status": "Prêt" if self.transcriber is not None else "Chargement…",
             "icon": ICON_PATH,
             "tiles": [
                 {"title": "Historique", "subtitle": f"{t['dictations']} aujourd'hui",
