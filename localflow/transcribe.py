@@ -34,7 +34,7 @@ def _recites_context(text: str, context: str) -> bool:
     """Vrai si la sortie n'est que le contexte de vocabulaire récité.
 
     Mesuré : sur un tour sans parole (bruit de pièce), Qwen3-ASR en langue figée
-    recopie son contexte mot pour mot — d'où les « Noto MetaMind AURA STUDIO
+    recopie son contexte mot pour mot — d'où les « Kalo DataMind NOVA STUDIO
     Wispr Flow » plantés au milieu d'un transcript de réunion. On rejette toute
     sortie d'au moins trois mots qui est une tranche continue du contexte : trois
     termes du dictionnaire enchaînés dans l'ordre, ce n'est pas quelqu'un qui parle.

@@ -56,9 +56,9 @@ class MotCoupe(unittest.TestCase):
 class BouclierDuDictionnaire(unittest.TestCase):
     """La correction floue ne réécrit jamais un mot qui existe."""
 
-    DICO = ("AUR'IA\nLinki\nClaude\nFirecrawl\nMetaMind\n"
+    DICO = ("AUR'IA\nLinki\nClaude\nFirecrawl\nDataMind\n"
             "oria -> AUR'IA\n"          # trop loin pour le flou (0,60) : règle explicite
-            "note bien -> Noto\n")       # explicite = explicite, même sur un vrai mot
+            "calot -> Kalo\n")       # explicite = explicite, même sur un vrai mot
 
     @classmethod
     def setUpClass(cls):
@@ -86,7 +86,7 @@ class BouclierDuDictionnaire(unittest.TestCase):
     A_CORRIGER = [
         ("la campagne Linky", "Linki"),
         ("teste Firecrall", "Firecrawl"),
-        ("dans Metamined", "MetaMind"),
+        ("dans Datamined", "DataMind"),
     ]
 
     def test_vrais_mots_intacts(self):
@@ -100,7 +100,7 @@ class BouclierDuDictionnaire(unittest.TestCase):
     def test_regle_explicite_passe_outre_le_bouclier(self):
         """« mauvais -> bon » est un ordre : il s'applique même à un vrai mot."""
         self.assertEqual(self.dic.apply("on regarde Oria"), "on regarde AUR'IA")
-        self.assertEqual(self.dic.apply("note bien ça"), "Noto ça")
+        self.assertEqual(self.dic.apply("calot ça"), "Kalo ça")
 
 
 if __name__ == "__main__":

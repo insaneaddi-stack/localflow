@@ -169,7 +169,7 @@ class Typography(unittest.TestCase):
 class LlmGuard(unittest.TestCase):
     """La passe IA n'a le droit que de reponctuer et de retirer du bruit."""
 
-    VOCAB = _vocab_keys(["Noto", "MetaMind"])
+    VOCAB = _vocab_keys(["Kalo", "DataMind"])
 
     ACCEPT = [
         ("ok donc premier point on valide le budget deuxième point il faut que je rappelle le client",
@@ -177,7 +177,7 @@ class LlmGuard(unittest.TestCase):
         ("je voulais euh te dire que que le projet avance",
          "Je voulais te dire que le projet avance."),
         ("nous nous sommes vus hier", "Nous nous sommes vus hier."),
-        ("noto est pret", "Noto est prêt."),          # accents et casse : variante proche
+        ("kalo est pret", "Kalo est prêt."),          # accents et casse : variante proche
         # amorce abandonnée : la suppression se termine par un marqueur
         ("alors je voulais dire que non pardon est-ce que ça marche",
          "Est-ce que ça marche ?"),

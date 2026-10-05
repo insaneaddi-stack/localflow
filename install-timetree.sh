@@ -5,8 +5,11 @@ set -e
 cd "$(dirname "$0")"
 
 SERVICE="LocalFlow TimeTree"
-MCP_DEFAUT="$HOME/Desktop/Projects/TIMETREE/dist/index.js"
-MCP="${1:-$MCP_DEFAUT}"
+MCP="${1:-}"
+if [ -z "$MCP" ]; then
+  echo "Usage : ./install-timetree.sh /chemin/vers/ton-serveur-mcp-timetree/dist/index.js"
+  exit 1
+fi
 
 echo "==> Serveur MCP TimeTree"
 if [ ! -f "$MCP" ]; then
@@ -84,5 +87,5 @@ fi
 
 echo
 echo "✅ Prêt. Redémarre l'agent (./run.sh), puis maintiens fn+⇧ en dictant :"
-echo "   « mets-moi un événement demain à 14h, déjeuner avec César »"
+echo "   « mets-moi un événement demain à 14h, déjeuner avec Paul »"
 echo "   L'aperçu s'affiche 3 s en bas de l'écran — Esc annule."

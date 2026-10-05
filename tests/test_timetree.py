@@ -48,10 +48,10 @@ for ligne in sys.stdin:
         continue
     nom = (msg.get("params") or {}).get("name")
     if nom == "list_calendars":
-        repond(ident, {"calendars": [{"id": "1001056215", "name": "Calendrier Louqman"}]})
+        repond(ident, {"calendars": [{"id": "123456789", "name": "Mon calendrier"}]})
     elif nom == "get_events":
         if scenario == "perdu-mais-ecrit":
-            repond(ident, {"events": [{"title": "Déjeuner avec César"}]})
+            repond(ident, {"events": [{"title": "Déjeuner avec Paul"}]})
         else:
             repond(ident, {"events": []})
     elif nom == "create_event":
@@ -73,7 +73,7 @@ for ligne in sys.stdin:
         repond(ident, {"success": True})
 '''
 
-EVENT = {"title": "Déjeuner avec César", "start_ms": 1789027200000, "end_ms": 1789030800000,
+EVENT = {"title": "Déjeuner avec Paul", "start_ms": 1789027200000, "end_ms": 1789030800000,
          "all_day": False, "start_timezone": "Europe/Paris", "end_timezone": "Europe/Paris"}
 
 
@@ -181,9 +181,9 @@ class BoutEnBout(unittest.TestCase):
 
     def test_chauffe_puis_cree(self):
         c = self.client("ok")
-        ok, message = c.warm("1001056215")
+        ok, message = c.warm("123456789")
         self.assertTrue(ok, msg=message)
-        ok, message = c.create("1001056215", EVENT)
+        ok, message = c.create("123456789", EVENT)
         self.assertTrue(ok, msg=message)
         self.assertEqual(c.creations, 1)
 
@@ -194,9 +194,9 @@ class BoutEnBout(unittest.TestCase):
         vrai = c._tool
         c._tool = lambda nom, args, timeout=None: (vus.update({nom: args}) or
                                                    vrai(nom, args, timeout or timetree.REPONSE_TIMEOUT_S))
-        c.warm("1001056215")
-        c.create("1001056215", dict(EVENT, note="demain 14h déjeuner avec César au bureau"))
-        self.assertEqual(vus["create_event"]["note"], "demain 14h déjeuner avec César au bureau")
+        c.warm("123456789")
+        c.create("123456789", dict(EVENT, note="demain 14h déjeuner avec Paul au bureau"))
+        self.assertEqual(vus["create_event"]["note"], "demain 14h déjeuner avec Paul au bureau")
 
     def test_sans_note_pas_de_champ_vide(self):
         vus = {}
@@ -204,8 +204,8 @@ class BoutEnBout(unittest.TestCase):
         vrai = c._tool
         c._tool = lambda nom, args, timeout=None: (vus.update({nom: args}) or
                                                    vrai(nom, args, timeout or timetree.REPONSE_TIMEOUT_S))
-        c.warm("1001056215")
-        c.create("1001056215", dict(EVENT, note=""))
+        c.warm("123456789")
+        c.create("123456789", dict(EVENT, note=""))
         self.assertNotIn("note", vus["create_event"])
 
     def test_agenda_absent_du_compte(self):
@@ -216,16 +216,16 @@ class BoutEnBout(unittest.TestCase):
 
     def test_erreur_reseau_puis_succes(self):
         c = self.client("reseau-puis-ok")
-        self.assertTrue(c.warm("1001056215")[0])
-        ok, message = c.create("1001056215", EVENT)
+        self.assertTrue(c.warm("123456789")[0])
+        ok, message = c.create("123456789", EVENT)
         self.assertTrue(ok, msg=message)
         self.assertEqual(c.creations, 2)
 
     def test_refus_ne_rejoue_pas(self):
         """Un CSRF invalide ne se répare pas en réessayant : on s'arrête tout de suite."""
         c = self.client("interdit")
-        self.assertTrue(c.warm("1001056215")[0])
-        ok, message = c.create("1001056215", EVENT)
+        self.assertTrue(c.warm("123456789")[0])
+        ok, message = c.create("123456789", EVENT)
         self.assertFalse(ok)
         self.assertEqual(c.creations, 1)
         self.assertIn("Authentication failed", message)
@@ -234,16 +234,16 @@ class BoutEnBout(unittest.TestCase):
         """Le cas qui compte : TimeTree a bien écrit, la réponse s'est perdue.
         La relecture doit voir l'événement et s'arrêter là."""
         c = self.client("perdu-mais-ecrit")
-        self.assertTrue(c.warm("1001056215")[0])
-        ok, message = c.create("1001056215", EVENT)
+        self.assertTrue(c.warm("123456789")[0])
+        ok, message = c.create("123456789", EVENT)
         self.assertTrue(ok)
         self.assertEqual(message, "déjà créé")
         self.assertEqual(c.creations, 1)      # une seule écriture tentée
 
     def test_serveur_mort(self):
         c = self.client("meurt")
-        self.assertTrue(c.warm("1001056215")[0])
-        ok, message = c.create("1001056215", EVENT)
+        self.assertTrue(c.warm("123456789")[0])
+        ok, message = c.create("123456789", EVENT)
         self.assertFalse(ok)
         self.assertTrue(message)
 
@@ -263,7 +263,7 @@ class Journal(unittest.TestCase):
             self.assertEqual(len(lignes), 2)
             entree = json.loads(lignes[0])
             self.assertEqual(entree["raison"], "réseau coupé")
-            self.assertEqual(entree["event"]["title"], "Déjeuner avec César")
+            self.assertEqual(entree["event"]["title"], "Déjeuner avec Paul")
 
     def test_un_disque_plein_ne_casse_rien(self):
         vrai, timetree.JOURNAL_ECHECS = timetree.JOURNAL_ECHECS, "/introuvable/x/y.jsonl"

@@ -27,9 +27,9 @@ DEFAULTS = {
     "meeting_folder": "",        # vide = ~/Documents/LocalFlow Réunions
     "meeting_keep_audio": True,  # garder l'audio .m4a à côté du .md
     "calendar_enabled": False,   # fn+⇧ envoie la dictée vers TimeTree au lieu de la taper
-    "calendar_id": "1001056215", # Calendrier Louqman
+    "calendar_id": "",           # agenda TimeTree cible (menu 🎙 → Agenda), propre à chaque compte
     "calendar_preview_s": 3.0,   # aperçu annulable (Esc) avant que l'événement parte
-    "calendar_mcp_path": "~/Desktop/Projects/TIMETREE/dist/index.js",   # serveur MCP TimeTree
+    "calendar_mcp_path": "",     # chemin vers dist/index.js du serveur MCP TimeTree (./install-timetree.sh)
     "decode_times": [],          # [[durée audio s, temps de décodage s]] : calibre la barre de progression
     "stats": {},                 # {"YYYY-MM-DD": {"words": n, "dictations": n, "audio_s": s}}
 }

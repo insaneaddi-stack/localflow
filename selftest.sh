@@ -81,12 +81,12 @@ out += s.flush(); assert len(out)==1 and 1.5 < out[0][1]-out[0][0] < 3.6, out"
 NAME="réunion : plancher d'énergie + contexte non récité"; t $PY -c "
 from localflow.transcribe import _recites_context as R
 from localflow.meeting import SEG_MIN_PEAK, SEG_MAX_GAIN
-CTX='Noto MetaMind AURA STUDIO Wispr Flow'
-assert R('Noto MetaMind AURA STUDIO Wispr Flow.', CTX) is True, 'dictionnaire récité : à rejeter'
-assert R('MetaMind AURA STUDIO', CTX) is True
-assert R('AURA STUDIO', CTX) is False, 'deux mots : trop risqué de rejeter'
-assert R(\"J'ai bossé sur MetaMind hier soir\", CTX) is False
-assert R('AURA STUDIO Noto', CTX) is False, 'pas dans l ordre du contexte'
+CTX='Kalo DataMind NOVA STUDIO Wispr Flow'
+assert R('Kalo DataMind NOVA STUDIO Wispr Flow.', CTX) is True, 'dictionnaire récité : à rejeter'
+assert R('DataMind NOVA STUDIO', CTX) is True
+assert R('NOVA STUDIO', CTX) is False, 'deux mots : trop risqué de rejeter'
+assert R(\"J'ai bossé sur DataMind hier soir\", CTX) is False
+assert R('NOVA STUDIO Kalo', CTX) is False, 'pas dans l ordre du contexte'
 # mesuré sur un vrai appel : bruit de pièce 0,028-0,046 de crête, parole 0,26-0,55
 assert 0.046 < SEG_MIN_PEAK < 0.26, SEG_MIN_PEAK
 assert SEG_MAX_GAIN <= 8.0, 'le gain ne doit plus amplifier le bruit x18'"
@@ -144,7 +144,7 @@ time.sleep(2.4)
 r = d.poll(recording=True); assert r and r[0] == 'ended', f'fin auto attendue, obtenu {r}'"
 NAME="apprentissage : multi-mots, démotion, priorité"; t $PY -c "
 from localflow.learning import diff_corrections, Learner
-assert diff_corrections('On stocke ça dans meta mind depuis mars.', 'On stocke ça dans MetaMind depuis mars.') == [('meta mind', 'MetaMind')]
+assert diff_corrections('On stocke ça dans data mind depuis mars.', 'On stocke ça dans DataMind depuis mars.') == [('data mind', 'DataMind')]
 assert diff_corrections('Je cherche le mail demain.', 'Je cherche le main demain.') == [('mail', 'main')]
 assert diff_corrections('Il faut absolument rappeler.', 'Il faut vraiment rappeler.') == [], 'reformulation apprise à tort'
 class C:
@@ -173,7 +173,7 @@ from AppKit import NSApplication; NSApplication.sharedApplication()
 from localflow.overlay import Overlay
 ov=Overlay(lambda:0.2, lambda:{'tiles':[{'title':'x','subtitle':'y','color':(1,0,0),'on':True,'action':'a'}]}, lambda a,p:None)
 ov.meeting_info=lambda:{'clock':'01:23','sys_level':0.3,'offer':'Zoom'}
-import time as _t; ov.calendar_preview={'label':'Demain 14:00 · Présenter le directeur commercial à César','until':_t.time()+3}
+import time as _t; ov.calendar_preview={'label':'Demain 14:00 · Présenter le directeur commercial à Paul','until':_t.time()+3}
 for st in ('meeting','meeting_offer','calendar_preview','expanded','recording','processing','hover','idle'):
     ov._set_state(st); ov.content_alpha=1.0; ov.cur_w,ov.cur_h,_=ov._target_size(st); ov.view.display()"
 NAME="overlay : les 56 transitions, frame par frame"; t $PY -c "
@@ -217,7 +217,7 @@ w=wave.open('/tmp/lf-say.wav'); a=np.frombuffer(w.readframes(w.getnframes()),np.
 t=Transcriber().transcribe(a, language='fr'); print(t); assert 'test' in t.lower() and 'dict' in t.lower()"
 NAME="Qwen : résumé de réunion";      t env HF_HUB_OFFLINE=1 $PY -c "
 from localflow.summarize import Summarizer
-md=Summarizer('qwen-1.7b').summarize('Moi : on valide le budget de 30 000 euros pour septembre.\nEux : ok, César envoie la maquette vendredi.', notes='- budget')
+md=Summarizer('qwen-1.7b').summarize('Moi : on valide le budget de 30 000 euros pour septembre.\nEux : ok, Paul envoie la maquette vendredi.', notes='- budget')
 print(md); s=Summarizer.sections(md); assert 'Résumé' in s and 'Actions' in s, md"
 fi
 if [ "$fail" = 0 ]; then echo "✅ Tout est vert."; else echo "❌ Corrige avant de relancer / pousser."; fi

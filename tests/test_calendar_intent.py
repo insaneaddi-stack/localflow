@@ -178,8 +178,8 @@ class LeFuseauEstCeluiDeLaMachine(unittest.TestCase):
 
 class NettoieLeTitre(unittest.TestCase):
     def test_retire_la_commande(self):
-        self.assertEqual(clean_title("mets-moi un événement déjeuner avec César"),
-                         "Déjeuner avec César")
+        self.assertEqual(clean_title("mets-moi un événement déjeuner avec Paul"),
+                         "Déjeuner avec Paul")
         self.assertEqual(clean_title("ajoute un rendez-vous dentiste"), "Dentiste")
 
     def test_majuscule_et_ponctuation(self):
@@ -197,12 +197,12 @@ class NettoieLeTitre(unittest.TestCase):
 class ConstruitLEvenement(unittest.TestCase):
     NOW = datetime.datetime(2026, 9, 9, 18, 46, tzinfo=TZ)
 
-    BRUT = {"titre": "Présenter le directeur commercial à César", "jour": "demain",
+    BRUT = {"titre": "Présenter le directeur commercial à Paul", "jour": "demain",
             "heure": "14:00", "duree_min": 60, "journee_entiere": False}
 
     def test_cas_nominal(self):
         ev = build_event(self.BRUT, self.NOW)
-        self.assertEqual(ev["title"], "Présenter le directeur commercial à César")
+        self.assertEqual(ev["title"], "Présenter le directeur commercial à Paul")
         self.assertEqual(ev["start_ms"], ms(2026, 9, 10, 12, 0))
         self.assertEqual(ev["_libelle"], "Demain 14:00")
         self.assertNotIn("_debut_local", ev)   # pas d'objet datetime jusqu'à TimeTree
@@ -263,14 +263,14 @@ class GardeFousSurLaPhrase(unittest.TestCase):
 
     def test_la_phrase_a_le_dernier_mot_sur_le_jour(self):
         """« demain matin » : le modèle disait aujourd'hui, la phrase dit demain."""
-        faux = {"titre": "Appeler César", "jour": "aujourd'hui", "heure": "09:00",
+        faux = {"titre": "Appeler Paul", "jour": "aujourd'hui", "heure": "09:00",
                 "duree_min": 60, "journee_entiere": False}
-        ev = build_event(faux, self.NOW, texte="rappelle-moi d'appeler César demain matin à 9h")
+        ev = build_event(faux, self.NOW, texte="rappelle-moi d'appeler Paul demain matin à 9h")
         self.assertEqual(ev["_libelle"], "Demain 09:00")
 
     def test_lecture_du_jour_dans_la_phrase(self):
         CAS = [
-            ("appeler César demain matin", "demain"),
+            ("appeler Paul demain matin", "demain"),
             ("le rendu après-demain", "après-demain"),
             ("on se voit aujourd'hui", "aujourd'hui"),
             ("réunion ce soir", "aujourd'hui"),

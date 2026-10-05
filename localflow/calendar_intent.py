@@ -85,8 +85,8 @@ SYSTEM_PROMPT = (
 
 FEW_SHOT = [
     (
-        "mets-moi un événement demain à 14h il faut que je présente le directeur commercial à César",
-        '{"titre": "Présenter le directeur commercial à César", "jour": "demain", '
+        "mets-moi un événement demain à 14h il faut que je présente le directeur commercial à Paul",
+        '{"titre": "Présenter le directeur commercial à Paul", "jour": "demain", '
         '"heure": "14:00", "duree_min": 60, "journee_entiere": false}',
     ),
     (
@@ -181,7 +181,7 @@ def mentions_time(texte):
 def find_day(texte):
     """Le jour lu DANS la phrase, prioritaire sur celui du modèle.
 
-    Mesuré : sur « rappelle-moi d'appeler César demain matin à 9h », Qwen3-1.7B
+    Mesuré : sur « rappelle-moi d'appeler Paul demain matin à 9h », Qwen3-1.7B
     répond « aujourd'hui ». Il lit bien l'heure et le titre, mais pas le jour ;
     on ne le lui demande donc plus quand la phrase le dit noir sur blanc.
     Renvoie un descripteur que resolve_day() sait lire, ou None.
