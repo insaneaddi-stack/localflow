@@ -46,6 +46,7 @@ from .tutorial import Tutorial
 from .overlay import Overlay
 from .permissions import PermissionsWindow
 from .paste import copy_text, paste_text, press_undo, type_text
+from . import youtube
 
 # La barre de menus portait des emoji — le dessin de quelqu'un d'autre.
 # Elle porte maintenant le monogramme, et l'état se lit à la forme du signe
@@ -274,6 +275,7 @@ class LocalFlowApp(rumps.App):
                                                self._toggle_calendar)
         self.item_panel = rumps.MenuItem("Panneau (double-tap fn)", callback=lambda _i: self.overlay.toggle_expanded())
         self.item_history = rumps.MenuItem("Historique…", callback=self._open_history)
+        self.item_youtube = rumps.MenuItem("Transcript YouTube (onglet Chrome)", callback=lambda _i: self._youtube_transcript())
         self.item_dict = rumps.MenuItem("Dictionnaire…", callback=self._open_dictionary)
         self.item_update = rumps.MenuItem("Vérifier les mises à jour", callback=self._check_update_clicked)
         self.item_tutorial = rumps.MenuItem("Revoir le tutoriel", callback=lambda _i: self.tutorial.show())
@@ -312,6 +314,7 @@ class LocalFlowApp(rumps.App):
             None,
             self.item_panel,
             self.item_history,
+            self.item_youtube,
             self.item_dict,
             self.item_meet,
             None,
@@ -364,7 +367,10 @@ class LocalFlowApp(rumps.App):
             "ask": self._meeting_ask, "delete": self._meeting_delete, "notify": _notify, "folder": self._meeting_folder})
         self._meeting_log_status()
         self._last_tap = 0.0
+        self._double_tap_t = 0.0
+        self._yt_status = ""
         self._finishing = False
+        self.overlay.bubble_hidden = self.config.bubble_hidden
         self._mode = "dictation"   # latché au fn down : « calendar » si ⇧ était tenu
         # Le tap tourne sur son propre thread : on renvoie chaque callback sur le thread principal.
         self.listener = FnListener(
@@ -687,12 +693,65 @@ class LocalFlowApp(rumps.App):
             self._cancel_recording()  # simple tap : rien…
             if now - self._last_tap < DOUBLE_TAP_S:
                 self._last_tap = 0.0
+                self._double_tap_t = now
                 self.overlay.toggle_expanded()  # …double tap : panneau
                 self.tutorial.event("panel")
+            elif now - self._double_tap_t < DOUBLE_TAP_S:
+                self._double_tap_t = 0.0        # …triple tap : masquer / montrer la bulle
+                if self.overlay.state == "expanded":
+                    self.overlay.toggle_expanded()
+                self._toggle_bubble()
             else:
                 self._last_tap = now
             return
         self._finish_recording()
+
+    def _youtube_transcript(self):
+        """Transcript de la vidéo YouTube de l'onglet Chrome (ou du lien copié) → presse-papier + .md."""
+        if self._yt_status:
+            _notify("YouTube", "Un transcript est déjà en cours.")
+            return
+        from AppKit import NSPasteboard, NSPasteboardTypeString
+        clip = NSPasteboard.generalPasteboard().stringForType_(NSPasteboardTypeString) or ""
+        url = youtube.find_url(clip)
+        if not url:
+            _notify("YouTube", "Ouvre une vidéo YouTube dans Chrome, ou copie son lien, puis relance.")
+            return
+        self._yt_status = "Récupération…"
+        _notify("YouTube", "Transcript en cours…")
+
+        def local(audio):
+            if self.transcriber is None:
+                return ""
+            with self.model_lock:
+                return self.transcriber.transcribe(audio, prompt=self._asr_prompt())
+
+        def progress(p):
+            self._yt_status = f"Transcription locale {int(p * 100)} %"
+
+        def work():
+            try:
+                t0 = time.time()
+                title, text, source = youtube.fetch(url, local, progress)
+                path = youtube.save(title, url, text, source)
+                _on_main(lambda: copy_text(text))
+                _log(f"youtube : {len(text.split())} mots ({source}) en {time.time() - t0:.0f}s")
+                _notify("Transcript copié ✓", f"{title[:60]} · {len(text.split())} mots ({source})")
+                subprocess.Popen(["open", "-R", path])
+            except Exception as exc:
+                _log(f"youtube : échec ({exc})")
+                _notify("YouTube", f"Impossible : {exc}")
+            finally:
+                self._yt_status = ""
+
+        threading.Thread(target=work, daemon=True, name="youtube").start()
+
+    def _toggle_bubble(self):
+        hidden = not self.config.bubble_hidden
+        self.config.bubble_hidden = hidden
+        self.overlay.bubble_hidden = hidden
+        self.overlay.view.setNeedsDisplay_(True)
+        _log(f"bulle {'masquée' if hidden else 'affichée'} (triple-tap fn)")
 
     def _on_shift(self):
         """⇧ enfoncé pendant que fn l'est déjà : rattrape l'accord fn+⇧."""
@@ -738,7 +797,7 @@ class LocalFlowApp(rumps.App):
             return False
         if self.overlay.state != "expanded":
             return False
-        idx = {18: 0, 19: 1, 20: 2, 21: 3}.get(keycode)  # touches 1-4 (position physique)
+        idx = {18: 0, 19: 1, 20: 2, 21: 3, 23: 4}.get(keycode)  # touches 1-5 (position physique)
         if idx is not None:
             def act():
                 tiles = self._panel_data().get("tiles", [])
@@ -1343,6 +1402,8 @@ class LocalFlowApp(rumps.App):
                  "on": self.meeting_rec.active, "action": "meeting_toggle"},
                 {"title": "Copier", "subtitle": (last[:34] + "…" if len(last) > 34 else last) if last else "Aucune dictée",
                  "icon": "doc.on.doc", "on": bool(last), "action": "copy_last"},
+                {"title": "YouTube", "subtitle": self._yt_status or "Transcript de l'onglet",
+                 "icon": "play.rectangle", "on": True, "action": "youtube"},
             ],
             "stats_line": f"Aujourd'hui · {t['words']} mots · {t['dictations']} dictées · ≈ {t['saved_min']:.0f} min gagnées",
             "toggles": [
@@ -1383,6 +1444,9 @@ class LocalFlowApp(rumps.App):
         elif action == "history":
             self.overlay.hide()
             self.history_window.show()
+        elif action == "youtube":
+            self.overlay.hide()
+            self._youtube_transcript()
         elif action == "meeting_toggle":
             self.overlay.hide()
             self._meeting_toggle_clicked(None)

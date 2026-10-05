@@ -60,7 +60,7 @@ HOVER_W, HOVER_H = 168.0, 26.0  # au survol on affiche vraiment quoi faire, d'o�
 PILL_W, PILL_H = 184.0, 36.0
 PROC_W, PROC_H = 184.0, 36.0    # même largeur que l'enregistrement : pas d'à-coup entre les deux
 WAVE_COUNT, WAVE_W, WAVE_GAP = 20, 2.5, 2.6   # mini-forme d'onde défilante
-PANEL_W, PANEL_H = 720.0, 292.0
+PANEL_W, PANEL_H = 820.0, 256.0
 MEET_W, MEET_H = 118.0, 22.0          # réunion en cours : point rouge + chrono
 OFFER_W, OFFER_H = 452.0, 44.0        # « Appel X détecté » + [Enregistrer] [Ignorer]
 CAL_W, CAL_H = 560.0, 44.0            # aperçu agenda : « Demain 14:00 · Titre » + décompte
@@ -264,6 +264,8 @@ class _BandView(NSView):
         if ov is None:
             return
         b = self.bounds()
+        if ov.bubble_hidden and ov.state in ("idle", "hover") and ov.fade_out <= 0.01:
+            return   # masquée : on ne peint rien, la fenêtre laisse déjà passer la souris
         cw, ch = ov.cur_w, ov.cur_h
         # « Rayon 8px, pas de pilule » : la règle vaut pour tout ce qui flotte.
         radius = theme.RAYON_CARTE if ch > 60.0 else theme.RAYON_FLOTTANT
@@ -554,7 +556,10 @@ class _BandView(NSView):
             # les plus anciennes (à gauche) s'effacent : le sens de lecture est évident
             a = (0.30 + 0.70 * (i / max(1, WAVE_COUNT - 1))) * k
             r = NSMakeRect(x0 + i * (WAVE_W + WAVE_GAP), cy - h / 2.0, WAVE_W, h)
-            _encre(a).setFill()
+            # Le bord vivant : les 4 dernières barres, c'est la voix en ce moment.
+            # Orange de décor, en rampe d'opacité — « ce qui demande l'attention ».
+            live = i - (WAVE_COUNT - 4)
+            (_orange((0.55 + 0.15 * live) * k) if live >= 0 else _encre(a)).setFill()
             NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(r, WAVE_W / 2, WAVE_W / 2).fill()
 
         # Mains-libres : le fil se coud sous la forme d'onde, puis ne bouge plus.
@@ -589,73 +594,60 @@ class _BandView(NSView):
 
     @objc.python_method
     def _draw_progress(self, pill, k):
-        """Barre 0→100 % pendant la transcription.
+        """« Transcription » balayé par la lumière + fil de progression orange en pied de carte.
 
-        Remplace les cinq barres qui oscillaient sur un sinus : joli, mais ça
-        n'indiquait rien — impossible de savoir si on en avait pour 0,5 s ou 5 s.
+        L'ancienne piste grise + « 0 % » se lisait comme un téléchargement. Ici le mot
+        dit ce qui se passe, le balayage (de l'encre plus dense, pas une lueur) dit que
+        ça vit, et la ligne orange en pied de carte donne l'avancement réel.
         """
+        from AppKit import NSGraphicsContext
         ov = self.overlay
         p = max(0.0, min(1.0, ov.progress_p))
         px, py = pill.origin.x, pill.origin.y
         pw, ph = pill.size.width, pill.size.height
+        m, num_w = 16.0, 38.0
+        if pw - 2 * m - num_w < 40.0 or ph < 16.0:
+            return          # pilule encore en pleine transition : rien à dessiner
+
+        label = "Transcription"
+        la = _attrs(12.0, 0.38 * k, weight=600, truncate=False, color=_encre2(0.38 * k))
+        lw = _text_width(label, la)
+        tr = NSMakeRect(px + m, py + (ph - 16) / 2.0 + 1.0, lw + 2, 16)
+        _draw_text(label, tr, la)
+        ctx = NSGraphicsContext.currentContext()
+        if ctx is not None and not ov.progress_done:
+            # balayage : une bande de 34 pt où le mot passe à l'encre pleine
+            band = 34.0
+            sx = tr.origin.x - band + (lw + 2 * band) * ((ov.phase * 0.55) % 1.0)
+            ctx.saveGraphicsState()
+            NSBezierPath.clipRect_(NSMakeRect(sx, tr.origin.y - 2, band, tr.size.height + 4))
+            _draw_text(label, tr, _attrs(12.0, 0.95 * k, weight=600, truncate=False, color=_encre(0.95 * k)))
+            ctx.restoreGraphicsState()
 
         pct = f"{int(p * 100 + 0.5)} %"
-        pa = _attrs(11.0, 0.90 * k, weight=0.45, truncate=False)
-        num_w = 40.0
-        m = 16.0
-        track_x = px + m
-        track_w = pw - 2 * m - num_w - 8.0
-        if track_w < 8.0 or ph < 16.0:
-            return          # pilule encore en pleine transition : rien à dessiner
-        track_h = 5.0
-        track_y = py + (ph - track_h) / 2.0
+        pa = _attrs(11.0, 0.70 * k, weight=0.45, truncate=False)
+        pw_ = _text_width(pct, pa)
+        _draw_text(pct, NSMakeRect(px + pw - m - pw_, py + (ph - 15) / 2.0 + 1.0, pw_ + 2, 15), pa)
 
-        track = NSMakeRect(track_x, track_y, track_w, track_h)
-        _encre(0.13 * k).setFill()
-        NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(track, track_h / 2, track_h / 2).fill()
-
-        fill_w = max(track_h, track_w * p)   # jamais plus fin que son propre arrondi
+        # fil de progression : piste à peine visible, avancement orange, en pied de carte
+        lx, lwid, ly, lh = px + 12.0, pw - 24.0, py + 5.0, 2.0
+        _encre(0.08 * k).setFill()
+        NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(lx, ly, lwid, lh), 1.0, 1.0).fill()
         if p > 0.0:
-            from AppKit import NSGraphicsContext
-            fill = NSMakeRect(track_x, track_y, fill_w, track_h)
-            fpath = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(fill, track_h / 2, track_h / 2)
-            ctx = NSGraphicsContext.currentContext()
-            ctx.saveGraphicsState()
-            fpath.addClip()
-            # Aplat orange, sans dégradé : chaque orange du système a un seul
-            # emploi, en mélanger deux pour faire joli les vide tous les deux.
             _orange(0.95 * k).setFill()
-            NSBezierPath.fillRect_(fill)
-            # Reflet qui balaie la partie remplie : garde la barre vivante quand la
-            # progression est lente, sans jamais laisser croire qu'elle avance.
-            if not ov.progress_done:
-                sheen_x = track_x + (fill_w + 60.0) * ((ov.phase * 0.65) % 1.0) - 30.0
-                sh = NSGradient.alloc().initWithColors_atLocations_colorSpace_(
-                    [_encre(0.0), _encre(0.30 * k), _encre(0.0)], [0.0, 0.5, 1.0], NSColorSpace.sRGBColorSpace())
-                sh.drawInRect_angle_(NSMakeRect(sheen_x, track_y, 60.0, track_h), 0.0)
-            ctx.restoreGraphicsState()
-            # Arrivée : le fil se coud d'un bout à l'autre de la piste.
-            # C'était un halo blanc qui se dilatait — le système exclut la lueur,
-            # et il donne justement au fil cet emploi : « elle se dessine une fois
-            # à l'arrivée, puis ne bouge plus ». Même geste, même durée, sans lueur.
-            dt = time.time() - ov.done_t0
-            if ov.done_t0 and dt < theme.D_ETAT:
-                e = theme.ease_arrivee(dt / theme.D_ETAT)
-                # Le fil traverse toute la pilule, pas seulement la piste : la
-                # barre est déjà pleine et orange, un trait posé dessus ne se
-                # verrait pas. Et traverser une frontière est précisément le seul
-                # privilège que le système accorde au fil.
-                fp = NSBezierPath.bezierPath()
-                fp.setLineWidth_(theme.FIL_EPAISSEUR)
-                fp.setLineCapStyle_(1)          # extrémités arrondies
-                x0 = px + ph / 2.0
-                y = py + 4.0
-                fp.moveToPoint_((x0, y))
-                fp.lineToPoint_((x0 + (pw - ph) * e, y))
-                _fil(0.95 * (1.0 - 0.5 * e) * k).setStroke()
-                fp.stroke()
-
-        _draw_text(pct, NSMakeRect(px + pw - m - num_w, py + (ph - 15) / 2.0, num_w, 15), pa)
+            NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+                NSMakeRect(lx, ly, max(lh, lwid * p), lh), 1.0, 1.0).fill()
+        dt = time.time() - ov.done_t0
+        if ov.done_t0 and dt < theme.D_ETAT:
+            # arrivée : le fil se coud d'un bout à l'autre, puis ne bouge plus
+            e = theme.ease_arrivee(dt / theme.D_ETAT)
+            fp = NSBezierPath.bezierPath()
+            fp.setLineWidth_(theme.FIL_EPAISSEUR)
+            fp.setLineCapStyle_(1)
+            fp.moveToPoint_((lx, ly + 1.0))
+            fp.lineToPoint_((lx + lwid * e, ly + 1.0))
+            _fil(0.95 * (1.0 - 0.5 * e) * k).setStroke()
+            fp.stroke()
 
     @objc.python_method
     def _draw_bars(self, pill, st, k):
@@ -790,44 +782,55 @@ class _BandView(NSView):
 
     @objc.python_method
     def _draw_tile(self, rect, tile, idx, ka, hovered):
-        """Tuile du système : une carte à filet, l'icône et le libellé à l'encre.
+        """Tuile : icône dans une pastille, libellé en casse normale, touche clavier en coin.
 
-        Il y avait ici une aura par tuile — violet, vert, rouge, bleu — un
-        dégradé lumineux et un grain. Le système n'a aucune de ces couleurs et
-        exclut la lueur. L'état se lit à l'encre : pleine quand c'est actif,
-        éteinte sinon. L'orange ne vient que sur ce qui vient d'être fait.
+        Les capitales grasses criaient ; la marque parle bas. L'état reste à l'encre
+        (pleine = actif, éteinte = non) et l'orange ne vient que sur ce qui vient d'être fait.
         """
         on = tile.get("on", True)
         ov = self.overlay
         copied = ov.flash_index == idx and time.time() - ov.flash_t0 < 1.2
-        path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
-            rect, theme.RAYON_CARTE, theme.RAYON_CARTE)
+        path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(rect, theme.RAYON_CARTE, theme.RAYON_CARTE)
         theme.ns(theme.CARTE if hovered else theme.FOND_PUR, ka).setFill()
         path.fill()
         theme.ns(theme.O_PETIT if copied else (theme.TRAIT_FORT if hovered else theme.TRAIT), ka).setStroke()
         path.setLineWidth_(theme.FILET * (2.0 if copied else 1.0))
         path.stroke()
-        w, h = rect.size.width, rect.size.height
-        # Icône, centrée dans la moitié haute : c'est elle qui rend les tuiles
-        # reconnaissables d'un coup d'œil, et elle porte l'état (allumé/éteint).
+        x, y, w, h = rect.origin.x, rect.origin.y, rect.size.width, rect.size.height
+
+        # pastille + icône
+        d = 46.0
+        cx, cy = x + 18.0 + d / 2.0, y + h - 22.0 - d / 2.0
+        disc = NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(cx - d / 2, cy - d / 2, d, d))
+        theme.ns(theme.CARTE if not hovered else theme.FOND_PUR, ka).setFill()
+        disc.fill()
+        theme.ns(theme.TRAIT, ka).setStroke()
+        disc.setLineWidth_(theme.FILET)
+        disc.stroke()
         icon = tile.get("icon")
         if icon:
-            img = self._symbol(icon, 30, 1.0)
+            img = self._symbol(icon, 21, 1.0)
             if img is not None:
                 sz = img.size()
-                self._draw_symbol(icon,
-                                  rect.origin.x + (w - sz.width) / 2.0,
-                                  rect.origin.y + h * 0.55 - sz.height / 2.0,
-                                  30, (0.95 if on else 0.30) * ka)
-        # numéro
-        _draw_text(str(idx + 1), NSMakeRect(rect.origin.x + w - 26, rect.origin.y + h - 30, 12, 12),
-                   _attrs(10.5, ka, weight=600, color=theme.ns(theme.ENCRE_3, 0.7 * ka)))
+                self._draw_symbol(icon, cx - sz.width / 2.0, cy - sz.height / 2.0, 21, (0.92 if on else 0.32) * ka)
+
+        # touche clavier
+        key = str(idx + 1)
+        kr = NSMakeRect(x + w - 16.0 - 20.0, y + h - 16.0 - 20.0, 20.0, 20.0)
+        kp = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(kr, 5.0, 5.0)
+        theme.ns(theme.TRAIT, 0.9 * ka).setStroke()
+        kp.setLineWidth_(theme.FILET)
+        kp.stroke()
+        ka_ = _attrs(10.5, ka, weight=600, truncate=False, color=theme.ns(theme.ENCRE_3, 0.9 * ka))
+        kw = _text_width(key, ka_)
+        _draw_text(key, NSMakeRect(kr.origin.x + (20.0 - kw) / 2.0, kr.origin.y + 3.0, kw + 2, 14), ka_)
+
         # libellé + état
-        _draw_text(tile["title"].upper(), NSMakeRect(rect.origin.x + 18, rect.origin.y + 40, w - 36, 20),
-                   _attrs(15, ka, weight=600, color=theme.ns(theme.ENCRE if on else theme.ENCRE_3, ka)))
-        sub = "Copié" if copied else tile.get("subtitle", "")
-        _draw_text(sub, NSMakeRect(rect.origin.x + 18, rect.origin.y + 20, w - 36, 16),
-                   _attrs(11.5, ka, color=theme.ns(theme.O_PETIT if copied else theme.ENCRE_3, ka)))
+        _draw_text(tile["title"], NSMakeRect(x + 18, y + 38, w - 36, 20),
+                   _attrs(14.5, ka, weight=650, color=theme.ns(theme.ENCRE if on else theme.ENCRE_3, ka)))
+        sub = "Copié ✓" if copied else tile.get("subtitle", "")
+        _draw_text(sub, NSMakeRect(x + 18, y + 18, w - 36, 16),
+                   _attrs(11.0, ka, color=theme.ns(theme.O_PETIT if copied else theme.ENCRE_3, ka)))
 
     @objc.python_method
     def _draw_panel(self, panel, k):
@@ -870,7 +873,7 @@ class _BandView(NSView):
                 self.hit_zones.append((NSMakeRect(x0 + i * (tw + gap), ty, tw, th),
                                        tile["action"], tile.get("payload")))
 
-        hint = "1–4   ·   esc"
+        hint = "1–5   ·   esc   ·   fn × 3 masque la bulle"
         ha = _attrs(10.5, 0.28 * k, weight=0.4)
         hw = _text_width(hint, ha)
         _draw_text(hint, NSMakeRect(px + pw - M - hw, py + 12, hw + 2, 14), ha)
@@ -888,6 +891,7 @@ class Overlay:
 
         self.state = "idle"
         self.base_state = "idle"        # "meeting" pendant une réunion : état de repos
+        self.bubble_hidden = False      # triple-tap fn : rien au repos, la bulle revient pour dicter
         self.meeting_info = lambda: {}  # fourni par l'app : {"clock", "sys_level", "offer"}
         self.calendar_preview = None    # {"label", "until"} pendant l'aperçu agenda
         self.phase = 0.0

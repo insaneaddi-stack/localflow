@@ -14,6 +14,7 @@ HISTORY_PATH = os.path.expanduser("~/.localflow.history.jsonl")
 DEFAULTS = {
     "cleanup_enabled": False,    # Qwen : +0,8 s ; Qwen3-ASR sort déjà un texte ponctué
     "sounds_enabled": True,
+    "bubble_hidden": False,      # triple-tap fn : la bulle de repos disparaît (elle revient pour dicter)
     "live_enabled": False,       # transcription en direct (streaming)
     "live_paste_fast": False,    # coller le texte du direct : Qwen3-ASR décode par blocs et
                                  # coupe les phrases — le batch ne met qu'~1 s, ça ne vaut plus le coup
@@ -158,6 +159,7 @@ class Config:
 
     cleanup_enabled = _bool_prop("cleanup_enabled")
     sounds_enabled = _bool_prop("sounds_enabled")
+    bubble_hidden = _bool_prop("bubble_hidden")
     live_enabled = _bool_prop("live_enabled")
     live_paste_fast = _bool_prop("live_paste_fast")
     tone_auto = _bool_prop("tone_auto")
