@@ -59,21 +59,6 @@ def _looks_broken(text: str, seconds: float) -> str:
     return ""
 
 
-def _wire_model():
-    """Verrouille la mémoire du modèle (poids + caches de la chauffe) pour que macOS ne
-    puisse plus la swapper. Mesuré avant (sept. 2026, 16 Go, ~15 Go de swap) : 406
-    « keep-warm lent » et des dictées à 10-30 s le temps de recharger les poids.
-    Renvoie le nombre d'octets verrouillés, 0 si impossible (macOS < 15, limite système)."""
-    try:
-        info = mx.device_info() if hasattr(mx, "device_info") else mx.metal.device_info()
-        want = int(mx.get_active_memory() * 1.25) + (256 << 20)   # marge : décodage des longues dictées
-        limit = min(want, int(info["max_recommended_working_set_size"] * 0.5))
-        mx.set_wired_limit(limit)
-        return limit
-    except Exception:
-        return 0
-
-
 class Transcriber:
     """Qwen3-ASR (MLX) : précis en français, ponctue seul, et accepte un contexte
     de vocabulaire (dictionnaire perso + corrections apprises). Deuxième passe
@@ -89,8 +74,6 @@ class Transcriber:
         self.session = Session(model_id, dtype=mx.float16)
         self.last_retry = ""
         self.transcribe(np.zeros(SAMPLE_RATE * 2, dtype=np.float32))  # chauffe
-        self.wired = _wire_model()
-
 
     def _decode(self, pcm, lang, context, max_new_tokens=None):
         result = self.session.transcribe(
