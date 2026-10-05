@@ -400,7 +400,7 @@ class _BandView(NSView):
 
     @objc.python_method
     def _draw_lockup(self, x, y, cap, k):
-        """Le logotype AUR'IA suivi de FLOW. Renvoie la largeur occupée.
+        """Le logotype AUR'IA. Renvoie la largeur occupée.
 
         Si le wordmark manque, on écrit le nom en Figtree avec l'apostrophe en
         orange — le brand book l'exige : « elle est orange, ou réservée en
@@ -413,9 +413,7 @@ class _BandView(NSView):
             w = cap * (sz.width / sz.height) if sz.height else cap * 3.8
             wm.drawInRect_fromRect_operation_fraction_(
                 NSMakeRect(x, y - cap * 0.06, w, cap), NSMakeRect(0, 0, 0, 0), 2, 0.95 * k)
-            fw = _text_width("FLOW", fa)
-            _draw_text("FLOW", NSMakeRect(x + w + 3, y - cap * 0.06, fw + 2, cap * 1.4), fa)
-            return w + 3 + fw
+            return w   # le logotype seul : « AUR'IA », sans suffixe
         oa = _attrs(cap, 0.95 * k, weight=700, truncate=False, color=_orange_t(0.95 * k))
         w1 = _text_width(theme.NOM_AVANT, fa)
         w2 = _text_width(theme.NOM_APOSTROPHE, oa)
