@@ -231,6 +231,7 @@ class _BandView(NSView):
         pt = self.convertPoint_fromView_(event.locationInWindow(), None)
         for rect, action, payload in self.hit_zones:
             if NSPointInRect(pt, rect):
+                self.press = (rect, time.time())   # retour visuel : la tuile s'enfonce
                 self.overlay._action(action, payload)
                 return
         self.overlay._on_click()
@@ -892,9 +893,24 @@ class _BandView(NSView):
         _draw_text(tile["title"], NSMakeRect(tx, cy + 1, tw, 17),
                    _attrs(13.0, ka, weight=650, color=theme.ns(theme.ENCRE if on else theme.ENCRE_3, ka)))
         sub = "Copié ✓" if copied else tile.get("subtitle", "")
-        _draw_text(sub, NSMakeRect(tx, cy - 15, tw, 14),
+        sx = tx
+        if tile.get("action") == "toggle" and not copied:
+            # interrupteur : point plein = activé, cercle vide = désactivé (l'état se lit sans lire)
+            dot = NSBezierPath.bezierPathWithOvalInRect_(NSMakeRect(tx + 0.5, cy - 10.5, 6, 6))
+            if on:
+                _encre(0.85 * ka).setFill(); dot.fill()
+            else:
+                theme.ns(theme.ENCRE_3, 0.8 * ka).setStroke(); dot.setLineWidth_(1.0); dot.stroke()
+            sx = tx + 11
+        _draw_text(sub, NSMakeRect(sx, cy - 15, tw - (sx - tx), 14),
                    _attrs(11.0, ka, color=theme.ns(theme.O_PETIT if copied else theme.ENCRE_3, ka)))
         self._keycap(str(idx + 1), x + w - 12 - 18, cy, ka, hovered)
+        if ov.focus_idx == idx:
+            ring = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+                NSMakeRect(x - 3, y - 3, w + 6, h + 6), theme.RAYON_CARTE + 3, theme.RAYON_CARTE + 3)
+            ring.setLineWidth_(2.0)
+            _orange(0.9 * ka).setStroke()
+            ring.stroke()
 
     @objc.python_method
     def _draw_panel(self, panel, k):
@@ -944,8 +960,12 @@ class _BandView(NSView):
         big.appendAttributedString_(NSAttributedString.alloc().initWithString_attributes_(
             "  mots", _attrs(13.0, a, weight=500, truncate=False, color=_encre2(a))))
         big.drawWithRect_options_(NSMakeRect(x0 + C - 1, head - 66 - dy, w1 - 2 * C, 48), 1)
-        _draw_text(f"{today.get('dictations', 0)} dictées", NSMakeRect(x0 + C, foot + 20 - dy, w1 - 2 * C, 16),
-                   _attrs(13.0, a, color=_encre2(a)))
+        avg = data.get("avg_words") or 0
+        if avg > 0:
+            d = (today.get("words", 0) - avg) / avg
+            arrow = "↑" if d >= 0 else "↓"
+            _draw_text(f"{arrow} {abs(d) * 100:.0f} % vs ta moyenne", NSMakeRect(x0 + C, head - 84 - dy, w1 - 2 * C, 16),
+                       _attrs(13.0, a, weight=500, color=_encre2(a)))
         _draw_text(f"≈ {today.get('saved_min', 0):.0f} min gagnées", NSMakeRect(x0 + C, foot - 2 - dy, w1 - 2 * C, 16),
                    _attrs(13.0, a, weight=600, color=theme.ns(theme.O_PETIT, a)))
 
@@ -962,17 +982,24 @@ class _BandView(NSView):
             step = (area_w - bw) / max(1, n - 1)
             base = foot + 18.0 - dy
             hmax = (head - 22.0) - base - 16.0        # place pour la valeur du jour au-dessus
+            hov_i = None
+            if self.hover_pt is not None:
+                for i in range(n):
+                    bx = x2 + C + i * step
+                    if NSPointInRect(self.hover_pt, NSMakeRect(bx - step / 2 + bw / 2, foot - 4, step, head - foot)):
+                        hov_i = i
             for i, (lab, wd, is_today) in enumerate(week):
                 bx = x2 + C + i * step
                 hh = max(2.0, hmax * (wd / mx) * a)
-                (_orange(0.95 * a) if is_today else _encre(0.20 * a)).setFill()
+                (_orange(0.95 * a) if is_today else _encre((0.34 if i == hov_i else 0.20) * a)).setFill()
                 NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(NSMakeRect(bx, base, bw, hh), 3.0, 3.0).fill()
                 la = _attrs(10.5, a, weight=650 if is_today else 400, truncate=False,
                             color=theme.ns(theme.O_PETIT if is_today else theme.ENCRE_3, a))
                 lw_ = _text_width(lab, la)
                 _draw_text(lab, NSMakeRect(bx + (bw - lw_) / 2.0, foot - 2 - dy, lw_ + 2, 14), la)
-                if is_today and wd:
-                    va = _attrs(10.5, a, weight=650, truncate=False, color=theme.ns(theme.O_PETIT, a))
+                if (is_today and hov_i is None or i == hov_i) and wd:
+                    va = _attrs(10.5, a, weight=650, truncate=False,
+                                color=theme.ns(theme.O_PETIT if is_today else theme.ENCRE, a))
                     v = f"{wd:,}".replace(",", " ")
                     vw = _text_width(v, va)
                     vx = min(bx + (bw - vw) / 2.0, x2 + w2 - C - vw)
@@ -1020,7 +1047,25 @@ class _BandView(NSView):
             if not getattr(self, "_ghost", False):
                 self.hit_zones.append((NSMakeRect(x0 + i * (tw + gap), ty, tw, self.ACT_H), tile["action"], tile.get("payload")))
 
-        hint = "1–5 actions   ·   ⏎ copier   ·   esc fermer   ·   fn × 3 masquer la bulle"
+        # bouton fermer (souris) : en haut à droite, aligné sur l'en-tête
+        cr = NSMakeRect(px + pw - P - 24, hc - 12.0, 24, 24)
+        hov_c = self.hover_pt is not None and NSPointInRect(self.hover_pt, cr)
+        if hov_c:
+            theme.ns(theme.CARTE, k).setFill()
+            NSBezierPath.bezierPathWithOvalInRect_(cr).fill()
+        self._symbol_fit("xmark", NSMakeRect(cr.origin.x + 7, cr.origin.y + 7, 10, 10), (0.85 if hov_c else 0.5) * k)
+        if not getattr(self, "_ghost", False):
+            self.hit_zones.append((cr, "close", None))
+
+        # pression : la zone cliquée s'assombrit 180 ms
+        press = getattr(self, "press", None)
+        if press and time.time() - press[1] < 0.18:
+            e = 1.0 - (time.time() - press[1]) / 0.18
+            pp = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(press[0], theme.RAYON_CARTE, theme.RAYON_CARTE)
+            _encre(0.06 * e * k).setFill()
+            pp.fill()
+
+        hint = "← → choisir   ·   1–5 ou ⏎ lancer   ·   esc fermer   ·   fn × 3 masquer la bulle"
         hat = _attrs(10.5, 0.36 * k, weight=0.4)
         hw = _text_width(hint, hat)
         _draw_text(hint, NSMakeRect(px + (pw - hw) / 2.0, py + 10, hw + 2, 14), hat)
@@ -1039,6 +1084,7 @@ class Overlay:
         self.state = "idle"
         self.base_state = "idle"        # "meeting" pendant une réunion : état de repos
         self.bubble_hidden = False      # triple-tap fn : rien au repos, la bulle revient pour dicter
+        self.focus_idx = None           # panneau : action sélectionnée au clavier (← →)
         self.meeting_info = lambda: {}  # fourni par l'app : {"clock", "sys_level", "offer"}
         self.calendar_preview = None    # {"label", "until"} pendant l'aperçu agenda
         self.phase = 0.0
@@ -1278,6 +1324,7 @@ class Overlay:
         if state == "expanded":
             self._install_click_monitor()
             self._data_cache = None
+            self.focus_idx = None
         else:
             self._remove_click_monitor()
         self.view.hit_zones = []
@@ -1332,6 +1379,9 @@ class Overlay:
         pass  # ouverture uniquement par double-tap fn (ou le menu)
 
     def _action(self, action, payload):
+        if action == "close":
+            self.hide()
+            return
         if action == "copy":
             self.flash_index = payload
             self.flash_t0 = time.time()

@@ -797,8 +797,23 @@ class LocalFlowApp(rumps.App):
             return False
         if self.overlay.state != "expanded":
             return False
-        if keycode in (36, 76):   # ⏎ : copier la dernière dictée
-            _on_main(lambda: self.overlay._action("copy_last", None))
+        if keycode in (123, 124):   # ← → : choisir une action
+            def move(step=(1 if keycode == 124 else -1)):
+                n = len(self._panel_data().get("tiles", []))
+                cur = self.overlay.focus_idx
+                self.overlay.focus_idx = (0 if step > 0 else n - 1) if cur is None else (cur + step) % n
+                self.overlay.view.setNeedsDisplay_(True)
+            _on_main(move)
+            return True
+        if keycode in (36, 76):   # ⏎ : l'action choisie, sinon copier la dernière dictée
+            def enter():
+                i = self.overlay.focus_idx
+                tiles = self._panel_data().get("tiles", [])
+                if i is not None and i < len(tiles):
+                    self.overlay._action(tiles[i]["action"], tiles[i].get("payload"))
+                else:
+                    self.overlay._action("copy_last", None)
+            _on_main(enter)
             return True
         idx = {18: 0, 19: 1, 20: 2, 21: 3, 23: 4}.get(keycode)  # touches 1-5 (position physique)
         if idx is not None:
@@ -1397,9 +1412,12 @@ class LocalFlowApp(rumps.App):
             d = _dt.date.today() - _dt.timedelta(days=back)
             week.append((jours[d.weekday()], stats.get(d.isoformat(), {}).get("words", 0), back == 0))
         h0 = hist[0] if hist else {}
+        passes = [w for _, w, today_ in week if not today_ and w > 0]
+        avg_words = sum(passes) / len(passes) if passes else 0
         return {
             "today": t,
             "week": week,
+            "avg_words": avg_words,
             "last": {"text": last, "app": h0.get("app", ""), "when": when(h0["t"]) if h0.get("t") else ""},
             "status": "Prêt · Qwen3-ASR" if self.transcriber is not None else "Chargement…",
             "icon": ICON_PATH,
