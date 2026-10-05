@@ -727,7 +727,7 @@ class LocalFlowApp(rumps.App):
                 return self.transcriber.transcribe(audio, prompt=self._asr_prompt())
 
         def progress(p):
-            self._yt_status = f"Transcription locale {int(p * 100)} %"
+            self._yt_status = f"Local · {int(p * 100)} %"
 
         def work():
             try:
@@ -1404,18 +1404,18 @@ class LocalFlowApp(rumps.App):
             "status": "Prêt · Qwen3-ASR" if self.transcriber is not None else "Chargement…",
             "icon": ICON_PATH,
             "tiles": [
-                {"title": "Historique", "subtitle": f"{t['dictations']} dictées aujourd'hui",
+                {"title": "Historique", "subtitle": f"{t['dictations']} aujourd'hui",
                  "icon": "clock.arrow.circlepath", "on": True, "action": "history"},
-                {"title": "Nettoyage IA", "subtitle": "Activé · +0,8 s" if self.config.cleanup_enabled else "Désactivé · instantané",
+                {"title": "Nettoyage IA", "subtitle": "Activé" if self.config.cleanup_enabled else "Désactivé",
                  "icon": "wand.and.sparkles",
                  "on": self.config.cleanup_enabled, "action": "toggle", "payload": "cleanup_enabled"},
-                {"title": "Réunion", "subtitle": (f"■ Arrêter · {_fmt_ts(self.meeting_rec.meeting.duration_s)}" if self.meeting_rec.active
-                                                  else ("Résumé en cours…" if self._meeting_busy else "Micro + son système")),
+                {"title": "Réunion", "subtitle": (f"■ {_fmt_ts(self.meeting_rec.meeting.duration_s)}" if self.meeting_rec.active
+                                                  else ("Résumé…" if self._meeting_busy else "Enregistrer")),
                  "icon": "stop.circle" if self.meeting_rec.active else "person.wave.2",
                  "on": self.meeting_rec.active, "action": "meeting_toggle"},
-                {"title": "Copier", "subtitle": (last[:34] + "…" if len(last) > 34 else last) if last else "Aucune dictée",
+                {"title": "Copier", "subtitle": "Dernière dictée" if last else "Rien à copier",
                  "icon": "doc.on.doc", "on": bool(last), "action": "copy_last"},
-                {"title": "YouTube", "subtitle": self._yt_status or "Transcript de l'onglet",
+                {"title": "YouTube", "subtitle": self._yt_status or "Onglet Chrome",
                  "icon": "play.rectangle", "on": True, "action": "youtube"},
             ],
             "stats_line": f"Aujourd'hui · {t['words']} mots · {t['dictations']} dictées · ≈ {t['saved_min']:.0f} min gagnées",
