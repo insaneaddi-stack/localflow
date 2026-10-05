@@ -23,6 +23,7 @@ import rumps
 from AppKit import NSApp, NSImage, NSOperationQueue
 
 from .audio import SAMPLE_RATE, Recorder, audio_stuck
+from .predecode import PreDecoder
 from . import theme
 from . import timetree
 from .calendar_intent import CalendarIntent
@@ -257,6 +258,7 @@ class LocalFlowApp(rumps.App):
         self._abort_gen = -1
         self._start_sound_timer = None
         self._live = None
+        self._pre = None           # transcription anticipée des longues dictées
         self._ctx_app = ("", "")
 
         # ---- menu ----
@@ -900,6 +902,9 @@ class LocalFlowApp(rumps.App):
             self._live.thread.start()
         else:
             self._live = None
+        self._stop_pre()
+        if not live and self.transcriber is not None:
+            self._pre = PreDecoder(self.recorder, self.transcriber, self.model_lock, self._asr_prompt)
         # Son de début différé : un simple tap ne fait pas de bruit
         self._cancel_start_sound_timer()
         self._start_sound_timer = threading.Timer(TAP_MAX_S, self._play, (SOUND_START,))
@@ -994,8 +999,14 @@ class LocalFlowApp(rumps.App):
         self._play(SOUND_STOP)
         _log("annulé (Esc)")
 
+    def _stop_pre(self):
+        if self._pre is not None:
+            self._pre.stop()
+            self._pre = None
+
     def _cancel_recording(self):
         self._cancel_start_sound_timer()
+        self._stop_pre()
         if self._live is not None:
             self._live.abort = True
         self.recorder.cancel()
@@ -1020,6 +1031,11 @@ class LocalFlowApp(rumps.App):
             # Esc est tombé pendant les TAIL_S : le minuteur arrive après la bataille.
             return
         audio = self.recorder.stop()
+        pre, self._pre = self._pre, None
+        if pre is not None and (self._mode != "dictation" or audio is None
+                                or not (pre.segments or pre.working)):
+            pre.stop()   # rien d'anticipé (dictée courte) ou mode calendrier : chemin normal
+            pre = None
         if audio is None or len(audio) < MIN_AUDIO_S * SAMPLE_RATE:
             _log(f"audio trop court ou vide ({0 if audio is None else len(audio)/SAMPLE_RATE:.2f}s), ignoré")
             if self._live is not None:
@@ -1028,8 +1044,12 @@ class LocalFlowApp(rumps.App):
             self._set_icon(self._idle_state())
             return
         voiced = self.recorder.voiced_s
+        if voiced < MIN_VOICED_S and pre is not None:
+            pre.stop()
         if voiced < MIN_VOICED_S:
-            if not np.any(audio):
+            # Zéros exacts, ou presque (< -120 dBFS : un vrai micro a toujours un souffle) :
+            # mesuré, 13 dictées perdues à « bruit -174 dBFS » passaient sous ce test.
+            if not np.any(audio) or self.recorder.noise_floor < 1e-6:
                 # Zéros exacts : ce n'est pas une pièce silencieuse, c'est un flux
                 # muet. On le rouvre tout de suite, sans attendre le délai
                 # d'inactivité, et on le dit : la phrase est à redire.
@@ -1045,11 +1065,12 @@ class LocalFlowApp(rumps.App):
         _log(f"audio {len(audio)/SAMPLE_RATE:.2f}s (voix {voiced:.1f}s, gain {self.recorder.gain_db:+.0f} dB) → transcription")
         self._set_icon("processing")
         self.overlay.show("processing")
-        self.overlay.begin_progress(self._decode_estimate(len(audio) / SAMPLE_RATE))
+        rest_s = (len(audio) - (pre.committed if pre else 0)) / SAMPLE_RATE
+        self.overlay.begin_progress(self._decode_estimate(rest_s))
         self._busy = True
         self._busy_since = time.time()
         self._jobs.put(("audio", {"audio": audio, "live": self._live, "app": self._ctx_app,
-                                  "voiced": voiced, "gen": self._gen, "mode": self._mode}))
+                                  "voiced": voiced, "gen": self._gen, "mode": self._mode, "pre": pre}))
         self._live = None
 
     # ---------- pipeline ----------
@@ -1093,13 +1114,18 @@ class LocalFlowApp(rumps.App):
                     # Le direct traîne : on le coupe avant de reprendre le modèle à notre compte.
                     live.abort = True
                     live.done.wait(LIVE_JOIN_S)
-                with self.model_lock:
-                    t_dec = time.time()
-                    text = self.transcriber.transcribe(audio, prompt=self._asr_prompt())
-                    # Mesuré autour du seul décodage : le temps d'attente du direct ou
-                    # du verrou fausserait l'estimation des prochaines dictées.
-                    self._record_decode_time(len(audio) / SAMPLE_RATE, time.time() - t_dec)
-                source = self.transcriber.name
+                pre = job.get("pre")
+                if pre is not None:
+                    text, rest_s = pre.finish(audio)
+                    source = f"{self.transcriber.name}, {pre.segments} segment(s) anticipé(s), reste {rest_s:.0f}s"
+                else:
+                    with self.model_lock:
+                        t_dec = time.time()
+                        text = self.transcriber.transcribe(audio, prompt=self._asr_prompt())
+                        # Mesuré autour du seul décodage : le temps d'attente du direct ou
+                        # du verrou fausserait l'estimation des prochaines dictées.
+                        self._record_decode_time(len(audio) / SAMPLE_RATE, time.time() - t_dec)
+                    source = self.transcriber.name
             # Dernier contrôle avant tout effet de bord : Esc a pu tomber
             # pendant le décodage, qui n'est pas interruptible en cours de route.
             if job_aborted(gen, self._abort_gen):

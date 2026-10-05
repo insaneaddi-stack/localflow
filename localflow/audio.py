@@ -297,6 +297,11 @@ class Recorder:
     def recording(self):
         return self._recording
 
+    def peek(self):
+        """Pendant l'enregistrement : copie de l'audio déjà capté (transcription anticipée)."""
+        chunks = list(self._chunks)   # le callback ne fait qu'ajouter : instantané cohérent
+        return np.concatenate(chunks) if chunks else np.zeros(0, dtype=np.float32)
+
     def start(self, live=False):
         self.last_reopen = None
         if self._stream is not None and self.muted(0.5):
