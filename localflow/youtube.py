@@ -29,6 +29,19 @@ def _bin(name):
                                        if os.path.exists(p)), None)
 
 
+def _env():
+    """Environnement des outils externes, SANS les variables Python de l'app.
+
+    C'était la panne : le LaunchAgent exporte PYTHONHOME/PYTHONPATH vers le Python 3.12
+    du venv, et yt-dlp (script Homebrew, autre version de Python) héritait de ce
+    PYTHONHOME → « No module named 'encodings' » au démarrage. Aucun titre, aucun
+    sous-titre, aucun audio : « audio introuvable » à chaque essai (log du 7 octobre)."""
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("PYTHONHOME", "PYTHONPATH", "DYLD_FALLBACK_LIBRARY_PATH")}
+    env["PATH"] = env.get("PATH", "") + ":/opt/homebrew/bin:/usr/local/bin"
+    return env
+
+
 def find_url(clipboard=""):
     """L'onglet actif de Chrome s'il est sur YouTube, sinon un lien YouTube du presse-papier."""
     try:
@@ -66,15 +79,21 @@ def vtt_to_text(vtt):
 
 def _title(ytdlp, url):
     r = subprocess.run([ytdlp, "--no-warnings", "--skip-download", "--print", "%(title)s", url],
-                       capture_output=True, text=True, timeout=60)
+                       capture_output=True, text=True, timeout=60, env=_env())
     return (r.stdout.strip().splitlines() or ["Vidéo YouTube"])[0]
+
+
+# Langues d'ORIGINE seulement. « fr.* » attrapait aussi les traductions automatiques
+# (« fr-en » = français traduit de l'anglais), que YouTube refuse en 429 : yt-dlp
+# s'arrêtait sur la première et n'écrivait aucun fichier.
+SUB_LANGS = "fr,fr-orig,fr-FR,en,en-orig,en-US,en-GB"
 
 
 def _subtitles(ytdlp, url, tmp):
     for flag in ("--write-subs", "--write-auto-subs"):
-        subprocess.run([ytdlp, "--no-warnings", "--skip-download", flag, "--sub-langs", "fr.*,fr,en.*,en",
+        subprocess.run([ytdlp, "--no-warnings", "--skip-download", flag, "--sub-langs", SUB_LANGS,
                         "--sub-format", "vtt", "-o", os.path.join(tmp, "sub.%(ext)s"), url],
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, timeout=120, env=_env())
         files = sorted(glob.glob(os.path.join(tmp, "sub*.vtt")), key=lambda f: (".fr" not in f, f))
         if files:
             text = vtt_to_text(open(files[0], encoding="utf-8", errors="ignore").read())
@@ -84,13 +103,14 @@ def _subtitles(ytdlp, url, tmp):
 
 
 def _audio(ytdlp, ffmpeg, url, tmp):
-    subprocess.run([ytdlp, "--no-warnings", "-f", "bestaudio", "-o", os.path.join(tmp, "a.%(ext)s"), url],
-                   capture_output=True, text=True, timeout=1800)
+    r = subprocess.run([ytdlp, "--no-warnings", "-f", "bestaudio", "-o", os.path.join(tmp, "a.%(ext)s"), url],
+                       capture_output=True, text=True, timeout=1800, env=_env())
     src = next(iter(glob.glob(os.path.join(tmp, "a.*"))), None)
     if not src:
-        return None
+        # La vraie raison (yt-dlp) plutôt qu'un « audio introuvable » muet.
+        raise RuntimeError("yt-dlp : " + ((r.stderr or "").strip().splitlines() or ["audio introuvable"])[-1][:200])
     raw = subprocess.run([ffmpeg, "-v", "error", "-i", src, "-ac", "1", "-ar", str(SR), "-f", "f32le", "-"],
-                         capture_output=True, timeout=1800).stdout
+                         capture_output=True, timeout=1800, env=_env()).stdout
     return np.frombuffer(raw, dtype=np.float32)
 
 

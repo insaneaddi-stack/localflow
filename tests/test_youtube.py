@@ -1,7 +1,9 @@
 """Sous-titres YouTube : les auto-sous-titres répètent chaque ligne en défilant."""
+import os
 import unittest
+from unittest import mock
 
-from localflow.youtube import YT_RE, vtt_to_text
+from localflow.youtube import SUB_LANGS, YT_RE, _env, vtt_to_text
 
 
 class Youtube(unittest.TestCase):
@@ -15,6 +17,18 @@ class Youtube(unittest.TestCase):
                   "https://www.youtube.com/shorts/abcdefgh"):
             self.assertTrue(YT_RE.match(u), u)
         self.assertFalse(YT_RE.match("https://www.youtube.com/@chaine"))
+
+    def test_yt_dlp_sans_le_python_de_l_app(self):
+        # Hérité du LaunchAgent, PYTHONHOME cassait yt-dlp (« No module named 'encodings' »).
+        with mock.patch.dict(os.environ, {"PYTHONHOME": "/x", "PYTHONPATH": "/y", "PATH": "/usr/bin"}):
+            env = _env()
+        self.assertNotIn("PYTHONHOME", env)
+        self.assertNotIn("PYTHONPATH", env)
+        self.assertIn("/opt/homebrew/bin", env["PATH"])
+
+    def test_pas_de_sous_titres_traduits(self):
+        # « fr.* » prenait « fr-en » (traduction auto), refusée en 429 par YouTube.
+        self.assertNotIn("*", SUB_LANGS)
 
 
 if __name__ == "__main__":
