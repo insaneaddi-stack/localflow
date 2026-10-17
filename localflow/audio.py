@@ -59,6 +59,45 @@ def default_input_id():
     except Exception:
         return 0
 
+# ---- micro Bluetooth : on lui préfère le micro intégré ----
+# Ouvrir le micro d'un casque Bluetooth (AirPods…) le bascule en mode « appel » : le son dans
+# les oreilles devient mauvais et la voix captée aussi. Le micro du Mac n'a aucun des deux défauts.
+_BLUETOOTH = {int.from_bytes(b"blue", "big"), int.from_bytes(b"blea", "big")}
+_BUILTIN = int.from_bytes(b"bltn", "big")
+
+def pick_input(devices, default_name, lid_closed=False):
+    """devices = [(nom, transport)]. Nom du micro intégré si le micro par défaut est Bluetooth,
+    sinon None (= on garde le micro par défaut). Capot fermé : macOS coupe le micro intégré,
+    il ne livrerait que du silence — le casque reste alors le seul micro."""
+    if lid_closed or dict(devices).get(default_name) not in _BLUETOOTH:
+        return None
+    return next((name for name, transport in devices if transport == _BUILTIN), None)
+
+def preferred_input():
+    """Micro à ouvrir à la place du micro par défaut, ou None."""
+    try:
+        import AVFoundation as AV
+        default = AV.AVCaptureDevice.defaultDeviceWithMediaType_(AV.AVMediaTypeAudio)
+        devices = [(str(d.localizedName()), int(d.transportType()))
+                   for d in AV.AVCaptureDevice.devicesWithMediaType_(AV.AVMediaTypeAudio)]
+        name = str(default.localizedName())
+        if dict(devices).get(name) not in _BLUETOOTH:
+            return None          # cas courant : pas besoin d'interroger le capot
+        return pick_input(devices, name, lid_closed=lid_closed())
+    except Exception:
+        return None
+
+def lid_closed():
+    """Vrai si le capot du MacBook est fermé (écran externe). Chemin complet : /usr/sbin
+    n'est pas dans le PATH du LaunchAgent."""
+    try:
+        import subprocess
+        out = subprocess.run(["/usr/sbin/ioreg", "-r", "-k", "AppleClamshellState", "-d", "1"],
+                             capture_output=True, text=True, timeout=2).stdout
+        return '"AppleClamshellState" = Yes' in out
+    except Exception:
+        return False
+
 _open_streams = set()
 _pa_lock = threading.Lock()
 
@@ -103,12 +142,11 @@ def reset_portaudio():
     (réinitialiser avec un flux ouvert = crash natif) ; leurs propriétaires les rouvrent."""
     with _pa_lock:
         for st in list(_open_streams):
-            for op in (st.stop, st.close):
-                try:
-                    op()
-                except Exception:
-                    pass
-        _open_streams.clear()
+            close_input_stream(st)
+        if _hung_closes:
+            # Pa_Terminate refermerait le flux figé et se figerait avec lui : on garde la
+            # liste de périphériques actuelle, l'app redémarre dès qu'elle est au repos.
+            return
         try:
             sd._terminate()
         except Exception:
@@ -133,15 +171,42 @@ def open_input_stream(**kwargs):
     _open_streams.add(stream)
     return stream
 
-def close_input_stream(stream):
+# Fermetures qui ne sont jamais revenues : id(flux) → heure du début.
+_hung_closes = {}
+CLOSE_WAIT_S = 2.0
+
+def close_input_stream(stream, wait_s=CLOSE_WAIT_S):
+    """Ferme un flux sans jamais bloquer l'appelant plus de wait_s.
+
+    Mesuré (août-oct. 2026) : 10 des 11 redémarrages « audio figé » arrivaient ~14 s après
+    « micro refermé (inactivité) » — c'est Pa_StopStream qui ne revenait pas (CoreAudio),
+    pas la veille. Il bloquait le fil des opérations audio : la dictée suivante attendait
+    6 s son micro puis était perdue, et l'app se tuait. La fermeture se fait donc sur un
+    fil jetable ; si elle se fige, le flux est abandonné (son callback est neutralisé par
+    le Recorder) et le micro suivant s'ouvre normalement."""
     if stream is None:
         return
     _open_streams.discard(stream)
-    for op in (stream.stop, stream.close):
-        try:
-            op()
-        except Exception:
-            pass
+    key = id(stream)
+    _hung_closes[key] = time.time()
+    done = threading.Event()
+
+    def work():
+        for op in (stream.stop, stream.close):
+            try:
+                op()
+            except Exception:
+                pass
+        _hung_closes.pop(key, None)
+        done.set()
+
+    threading.Thread(target=work, daemon=True, name="audio-close").start()
+    done.wait(wait_s)
+
+def hung_close_s():
+    """Depuis combien de secondes une fermeture de flux est figée (0 si aucune)."""
+    starts = list(_hung_closes.values())
+    return time.time() - min(starts) if starts else 0.0
 
 class Recorder:
     def __init__(self):
@@ -184,13 +249,24 @@ class Recorder:
             if self._device_id and self._device_id != getattr(self, "_opened_id", None) and getattr(self, "_opened_id", None):
                 reset_portaudio()   # le périphérique a changé depuis la dernière ouverture : liste à rafraîchir
             self._opened_id = self._device_id
+            device = preferred_input()
             try:
-                self._device_name = sd.query_devices(kind="input")["name"]
+                self._device_name = device or sd.query_devices(kind="input")["name"]
             except Exception:
                 self._device_name = None
+            # Un flux abandonné (fermeture figée) peut continuer à livrer : seul le
+            # flux courant a le droit d'écrire dans l'anneau.
+            self._stream_gen = getattr(self, "_stream_gen", 0) + 1
+            gen = self._stream_gen
+
+            def callback(indata, frames, time_info, status):
+                if gen != self._stream_gen:
+                    raise sd.CallbackAbort
+                self._callback(indata, frames, time_info, status)
+
             self._stream = open_input_stream(
                 samplerate=SAMPLE_RATE, channels=1, dtype="float32",
-                blocksize=BLOCK, callback=self._callback,
+                blocksize=BLOCK, callback=callback, device=device,
             )
             self._last_callback = time.time()
             self._silent_since = 0.0
@@ -198,6 +274,7 @@ class Recorder:
 
     def _close_stream(self):
         stream, self._stream = self._stream, None
+        self._stream_gen = getattr(self, "_stream_gen", 0) + 1   # ce flux n'écrit plus rien
         close_input_stream(stream)
 
     def healthy(self):
