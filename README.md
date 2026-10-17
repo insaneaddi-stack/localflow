@@ -1,7 +1,7 @@
 # LocalFlow 🎙
 
 Dictée vocale **locale, gratuite et 100 % hors-ligne** pour macOS (Apple Silicon) — dans l'esprit de Wispr Flow.
-Maintiens `fn`, parle, relâche : le texte est collé dans l'app active, en ~0,7 s. Rien ne quitte ton Mac.
+Maintiens `fn`, parle, relâche : le texte est collé dans l'app active, en ~0,7 s. Rien ne quitte ton Mac (sauf si tu ajoutes une clé Mistral : voir [Moteur](#moteur--voxtral-en-ligne-qwen-local-en-repli)).
 
 ## Installation (une commande)
 
@@ -51,6 +51,18 @@ Autorisation supplémentaire, une fois : **Enregistrement de l'écran et audio s
 - **Ton adapté à l'app** (avec Nettoyage IA) : relâché dans Slack/WhatsApp, soigné dans Mail/Notion.
 - **Historique** (300 dictées, recherche, clic = copier) et statistiques (mots, temps gagné).
 - Le log (`~/.localflow.log`) ne contient jamais le texte dicté.
+
+## Moteur : Voxtral en ligne, Qwen local en repli
+
+Avec une clé Mistral, la dictée part vers **Voxtral** (`voxtral-mini-latest`, ~0,5 s) et Qwen3-ASR n'est plus gardé en mémoire (1,6 Go de moins, plus de swap). Sans clé, rien ne change : tout reste local.
+
+- **Clé** : rangée dans le trousseau macOS, jamais dans le dépôt :
+  `security add-generic-password -U -a localflow -s localflow-mistral -w` (la commande demande la clé).
+- **Repli silencieux** : réseau coupé, délai dépassé (6 s + 0,15 s par seconde d'audio), 429, erreur serveur ou résultat vide → la même dictée est transcrite par Qwen local, chargé à ce moment-là. Après une panne, 1 min en local direct. Qwen est libéré après 10 min sans servir.
+- **Vocabulaire** : dictionnaire + corrections apprises envoyés en `context_bias`. Langue : détection automatique (français et anglais).
+- **Réglages** (`~/.localflow.json`) : `"engine": "voxtral"` ou `"local"` (aussi dans le menu : *Voxtral en ligne*), `"local_preload": true` pour garder Qwen chargé quand même (repli instantané).
+- **Réunions, direct et YouTube restent en local**.
+- **Vie privée** : l'audio des dictées est envoyé à Mistral. Désactive l'utilisation de tes données pour l'entraînement dans les réglages de confidentialité de la console Mistral (console.mistral.ai). Sans clé, rien ne quitte le Mac.
 
 ## Commandes utiles
 

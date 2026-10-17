@@ -32,6 +32,8 @@ DEFAULTS = {
     "calendar_mcp_path": "",     # chemin vers dist/index.js du serveur MCP TimeTree (./install-timetree.sh)
     "decode_times": [],          # [[durée audio s, temps de décodage s]] : calibre la barre de progression
     "stats": {},                 # {"YYYY-MM-DD": {"words": n, "dictations": n, "audio_s": s}}
+    "engine": "voxtral",         # "voxtral" (API Mistral, repli Qwen local) ou "local" (Qwen seul)
+    "local_preload": False,      # charger Qwen dès le démarrage même avec Voxtral (repli instantané, +1,6 Go)
 }
 
 HISTORY_MAX = 20000       # ~8 mois à 80 dictées par jour
@@ -168,6 +170,7 @@ class Config:
     meeting_auto_detect = _bool_prop("meeting_auto_detect")
     meeting_keep_audio = _bool_prop("meeting_keep_audio")
     calendar_enabled = _bool_prop("calendar_enabled")
+    local_preload = _bool_prop("local_preload")
 
     def _str_prop(key):
         def fget(self):
@@ -183,6 +186,7 @@ class Config:
     meeting_language = _str_prop("meeting_language")
     meeting_folder = _str_prop("meeting_folder")
     calendar_id = _str_prop("calendar_id")
+    engine = _str_prop("engine")
 
     @property
     def calendar_mcp_path(self):

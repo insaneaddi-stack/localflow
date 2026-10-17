@@ -42,6 +42,7 @@ from .summarize import MODELS as SUMMARY_MODELS, Summarizer
 from . import sounds
 from . import sysaudio
 from . import update
+from . import voxtral
 from .tutorial import Tutorial
 from .overlay import Overlay
 from .permissions import PermissionsWindow
@@ -78,6 +79,7 @@ BUSY_TIMEOUT_S = 90  # au-delà, on considère le pipeline coincé et on se déb
 HEALTH_EVERY_S = 2
 MIC_LINGER_S = 15        # micro gardé ouvert après une dictée (enchaînements sans latence), puis fermé
 STALE_UI_S = 8       # overlay/icône restés bloqués sans enregistrement ni traitement
+LOCAL_IDLE_S = 600   # mode Voxtral : Qwen chargé pour un repli est libéré après 10 min sans servir
 KEEP_WARM_S = 30     # au repos : micro-inférence périodique pour que macOS ne swappe pas le modèle
 # Un seuil ABSOLU criait au loup : une dictée de 45 s met légitimement 5 s à
 # décoder. Mesuré sur 943 dictées, les lignes « LENT » avaient un meilleur
@@ -233,7 +235,11 @@ class LocalFlowApp(rumps.App):
         self.cleaner = Cleaner()
         self.dictionary = Dictionary()
         self.learner = Learner(self.config, _notify, _log)
-        self.transcriber = None   # Qwen3-ASR : dictée, direct et réunions
+        self.transcriber = None   # Qwen3-ASR : repli de Voxtral, direct et réunions — chargé à la demande
+        self._local_lock = threading.Lock()
+        self._local_used = 0.0
+        self.engine = voxtral.Engine(self._local_asr, _log, use_api=self._wants_api())
+        self._ready = False       # vrai dès qu'une dictée peut être transcrite
         try:  # icône de l'app (Dock quand une fenêtre est ouverte, Cmd+Tab)
             icon = NSImage.alloc().initWithContentsOfFile_(ICON_PATH)
             if icon:
@@ -267,6 +273,8 @@ class LocalFlowApp(rumps.App):
         # ---- menu ----
         self.item_status = rumps.MenuItem("Chargement du modèle…")
         self.item_stats = rumps.MenuItem("Statistiques : —", callback=self._open_history)
+        self.item_engine = rumps.MenuItem("Voxtral en ligne (repli local auto)", callback=self._toggle_engine)
+        self.item_engine.state = self.config.engine == "voxtral"
         self.item_cleanup = self._toggle_item("Nettoyage IA", "cleanup_enabled", self._toggle_cleanup)
         self.item_live = self._toggle_item("Transcription en direct", "live_enabled")
         self.item_fast = self._toggle_item("Coller le texte du direct (moins précis)", "live_paste_fast")
@@ -320,6 +328,7 @@ class LocalFlowApp(rumps.App):
             self.item_dict,
             self.item_meet,
             None,
+            self.item_engine,
             self.item_cleanup,
             self.item_tone,
             self.item_live,
@@ -546,11 +555,9 @@ class LocalFlowApp(rumps.App):
         delay = 5
         notified = False
         repare = False
-        while self.transcriber is None:
+        while self.transcriber is None and (not self.engine.use_api or self.config.local_preload):
             try:
-                from .transcribe import Transcriber
-
-                self.transcriber = Transcriber()
+                self._local_asr()
             except Exception as exc:
                 _log("échec chargement du moteur:\n" + traceback.format_exc())
                 # Une seule tentative de réparation : si elle ne suffit pas, le
@@ -581,8 +588,13 @@ class LocalFlowApp(rumps.App):
             elif first:
                 self.tutorial.show()
 
+        self._ready = True
         _on_main(ready)
-        _log(f"démarrage: moteur {self.transcriber.name} chargé, prêt")
+        if self.engine.use_api:
+            _log("démarrage: moteur voxtral, repli qwen3-asr "
+                 + ("chargé" if self.transcriber is not None else "à la demande") + ", prêt")
+        else:
+            _log(f"démarrage: moteur {self.transcriber.name} chargé, prêt")
         try:
             os.remove(CRASH_FILE)      # démarrage réussi : l'ardoise est effacée
         except OSError:
@@ -598,10 +610,15 @@ class LocalFlowApp(rumps.App):
                 try:
                     kind, payload = self._jobs.get(timeout=KEEP_WARM_S)
                 except queue.Empty:
-                    self._keep_warm()
+                    if self.engine.use_api and not self.config.local_preload:
+                        self._unload_local_if_idle()
+                    else:
+                        self._keep_warm()
                     continue
                 if kind == "preload":
                     self.cleaner.preload()
+                elif kind == "load_local":
+                    self._local_asr()
                 elif kind == "audio":
                     self._process(payload)
             except Exception:
@@ -611,7 +628,7 @@ class LocalFlowApp(rumps.App):
     def _keep_warm(self):
         """Garde les poids de Qwen3-ASR « chauds » : sous pression mémoire (swap), macOS expulse
         les pages inutilisées et la dictée suivante met 5–15 s à les recharger."""
-        if self.recorder.recording or self._busy or self.meeting_rec.active:
+        if self.recorder.recording or self._busy or self.meeting_rec.active or self.transcriber is None:
             return
         try:
             t0 = time.time()
@@ -622,6 +639,46 @@ class LocalFlowApp(rumps.App):
                 _log(f"keep-warm lent ({dt:.1f}s) : modèle rechargé depuis le swap — {_mem_state()}")
         except Exception:
             pass
+
+    def _wants_api(self):
+        return self.config.engine == "voxtral" and bool(voxtral.api_key())
+
+    def _local_asr(self):
+        """Qwen3-ASR, chargé à la première demande (repli de Voxtral, réunions, YouTube)."""
+        with self._local_lock:
+            if self.transcriber is None:
+                from .transcribe import Transcriber
+
+                t0 = time.time()
+                self.transcriber = Transcriber()
+                _log(f"qwen3-asr chargé en {time.time() - t0:.1f}s")
+            self._local_used = time.time()
+            return self.transcriber
+
+    def _unload_local_if_idle(self):
+        """Mode Voxtral : Qwen chargé pour un repli est rendu après LOCAL_IDLE_S sans servir.
+        Sinon il resterait 1,6 Go en RAM — exactement ce qui faisait swapper le Mac."""
+        if self.transcriber is None or time.time() - self._local_used < LOCAL_IDLE_S:
+            return
+        if self.meeting_rec.active or self.recorder.recording or self._busy:
+            return
+        with self.model_lock, self._local_lock:
+            self.transcriber = None
+        import gc
+        import mlx.core as mx
+        gc.collect()
+        mx.clear_cache()
+        _log(f"qwen3-asr libéré ({LOCAL_IDLE_S // 60} min sans servir)")
+
+    def _toggle_engine(self, item):
+        item.state = not item.state
+        self.config.engine = "voxtral" if item.state else "local"
+        self.engine.use_api = self._wants_api()
+        if item.state and not self.engine.use_api:
+            _notify("Voxtral indisponible", "Clé Mistral absente du trousseau (service localflow-mistral) : Qwen local reste le moteur.")
+        if not self.engine.use_api:
+            self._jobs.put(("load_local", None))   # Qwen redevient le moteur : on le charge maintenant
+        _log(f"moteur : {'voxtral' if self.engine.use_api else 'local'}")
 
     # ---------- estimation du temps de décodage ----------
 
@@ -675,8 +732,8 @@ class LocalFlowApp(rumps.App):
             self._suppress_next_release = True
             self._finish_recording()
             return
-        if self.transcriber is None or self._busy or self._finishing:
-            _log(f"fn ignoré (modèle prêt: {self.transcriber is not None}, busy: {self._busy})")
+        if not self._ready or self._busy or self._finishing:
+            _log(f"fn ignoré (modèle prêt: {self._ready}, busy: {self._busy})")
             return
         self._mode = dictation_mode(shift, self.config.calendar_enabled)
         _log("fn down" + (" + ⇧ → agenda" if self._mode == "calendar" else ""))
@@ -723,10 +780,8 @@ class LocalFlowApp(rumps.App):
         _notify("YouTube", "Transcript en cours…")
 
         def local(audio):
-            if self.transcriber is None:
-                return ""
             with self.model_lock:
-                return self.transcriber.transcribe(audio, prompt=self._asr_prompt())
+                return self._local_asr().transcribe(audio, prompt=self._asr_prompt())
 
         def progress(p):
             self._yt_status = f"Local · {int(p * 100)} %"
@@ -943,7 +998,7 @@ class LocalFlowApp(rumps.App):
             active = self.recorder.recording or self._busy
             if active:
                 self._idle_since = time.time()
-            elif self.transcriber is not None and self._icon_state != self._idle_state() \
+            elif self._ready and self._icon_state != self._idle_state() \
                     and time.time() - self._idle_since > STALE_UI_S:
                 _log("santé: UI bloquée, remise à zéro")
                 self.hands_free = False
@@ -959,7 +1014,8 @@ class LocalFlowApp(rumps.App):
     def _start_recording(self):
         self._gen += 1
         self._ctx_app = frontmost_app()
-        live = self.config.live_enabled and self.transcriber is not None
+        # Le direct décode avec la session Qwen : seulement quand Qwen est le moteur.
+        live = self.config.live_enabled and not self.engine.use_api and self.transcriber is not None
         try:
             self.recorder.start(live=live)
             if self.recorder.last_reopen:
@@ -982,8 +1038,8 @@ class LocalFlowApp(rumps.App):
         else:
             self._live = None
         self._stop_pre()
-        if not live and self.transcriber is not None:
-            self._pre = PreDecoder(self.recorder, self.transcriber, self.model_lock, self._asr_prompt)
+        if not live and self._ready:
+            self._pre = PreDecoder(self.recorder, self.engine, self.model_lock, self._asr_prompt)
         # Son de début différé : un simple tap ne fait pas de bruit
         self._cancel_start_sound_timer()
         self._start_sound_timer = threading.Timer(TAP_MAX_S, self._play, (SOUND_START,))
@@ -1196,15 +1252,15 @@ class LocalFlowApp(rumps.App):
                 pre = job.get("pre")
                 if pre is not None:
                     text, rest_s = pre.finish(audio)
-                    source = f"{self.transcriber.name}, {pre.segments} segment(s) anticipé(s), reste {rest_s:.0f}s"
+                    source = f"{self.engine.name}, {pre.segments} segment(s) anticipé(s), reste {rest_s:.0f}s"
                 else:
                     with self.model_lock:
                         t_dec = time.time()
-                        text = self.transcriber.transcribe(audio, prompt=self._asr_prompt())
+                        text = self.engine.transcribe(audio, prompt=self._asr_prompt())
                         # Mesuré autour du seul décodage : le temps d'attente du direct ou
                         # du verrou fausserait l'estimation des prochaines dictées.
                         self._record_decode_time(len(audio) / SAMPLE_RATE, time.time() - t_dec)
-                    source = self.transcriber.name
+                    source = self.engine.name
             # Dernier contrôle avant tout effet de bord : Esc a pu tomber
             # pendant le décodage, qui n'est pas interruptible en cours de route.
             if job_aborted(gen, self._abort_gen):
@@ -1254,7 +1310,7 @@ class LocalFlowApp(rumps.App):
                 _on_main(self.history_window.refresh)
                 _on_main(self.overlay.refresh)
                 # Le texte dicté n'est PAS écrit dans le log (vie privée).
-                retry = getattr(self.transcriber, "last_retry", "")
+                retry = self.engine.last_retry
                 dt = time.time() - t0
                 attendu = self._decode_estimate(seconds)
                 _log(f"{how} en {dt:.1f}s via {source} ({words} mots, ton {tone}, app {app_name or '?'})"
@@ -1421,7 +1477,7 @@ class LocalFlowApp(rumps.App):
             "week": week,
             "avg_words": avg_words,
             "last": {"text": last, "app": h0.get("app", ""), "when": when(h0["t"]) if h0.get("t") else ""},
-            "status": "Prêt" if self.transcriber is not None else "Chargement…",
+            "status": "Prêt" if self._ready else "Chargement…",
             "icon": ICON_PATH,
             "tiles": [
                 {"title": "Historique", "subtitle": f"{t['dictations']} aujourd'hui",
@@ -1529,9 +1585,9 @@ class LocalFlowApp(rumps.App):
         return f
 
     def _meeting_transcribe(self, audio, prompt, language=""):
-        if self.transcriber is None:
-            raise RuntimeError("moteur non chargé")
-        return self.transcriber.transcribe(audio, prompt=prompt, language=language)
+        # Réunions : toujours en local. Rien ne coince côté quotas (tours ≤ 30 s), mais ce
+        # sont les voix des autres participants, et le README promet « sans cloud ».
+        return self._local_asr().transcribe(audio, prompt=prompt, language=language)
 
     def _meeting_log_status(self):
         if not sysaudio.macos_ok():
@@ -1559,7 +1615,7 @@ class LocalFlowApp(rumps.App):
         if self.overlay.state == "meeting_offer" and time.time() - self._offer_t0 > OFFER_TIMEOUT_S:
             self._offer_app = ""
             self.overlay.hide()
-        if not self.config.meeting_auto_detect or self.transcriber is None:
+        if not self.config.meeting_auto_detect or not self._ready:
             return
         # ignore_mic ne sert plus que sur le chemin de repli : la détection par processus
         # exclut déjà notre propre PID, donc elle reste fiable pendant qu'on dicte.
@@ -1588,7 +1644,7 @@ class LocalFlowApp(rumps.App):
     def _meeting_start(self, app=""):
         if self.meeting_rec.active or self._meeting_busy:
             return
-        if self.transcriber is None:
+        if not self._ready:
             _notify("Réunion", "Le moteur de transcription n'est pas encore chargé.")
             return
         if not app:
