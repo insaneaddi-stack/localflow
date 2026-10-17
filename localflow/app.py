@@ -146,7 +146,9 @@ def _notify(title, message):
 def _mem_state():
     """Swap utilisé / libre (diagnostic des lenteurs)."""
     try:
-        out = subprocess.run(["sysctl", "-n", "vm.swapusage"], capture_output=True, text=True, timeout=2).stdout
+        # Chemin complet : /usr/sbin n'est pas dans le PATH du LaunchAgent, d'où
+        # les « swap ? » du log — le diagnostic n'avait jamais marché sous launchd.
+        out = subprocess.run(["/usr/sbin/sysctl", "-n", "vm.swapusage"], capture_output=True, text=True, timeout=2).stdout
         return "swap " + " ".join(out.split())
     except Exception:
         return "swap ?"
