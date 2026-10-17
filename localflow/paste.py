@@ -7,7 +7,12 @@ import Quartz
 from AppKit import NSPasteboard, NSPasteboardItem, NSPasteboardTypeString
 
 V_KEYCODE = 9  # touche 'v' (même position physique en AZERTY)
-RESTORE_DELAY_S = 0.6
+# Le presse-papiers d'origine est remis dès que le texte est vu dans le champ (relu via
+# Accessibilité), au plus tard après RESTORE_MAX_S. 0,6 s fixe était trop court pour une
+# app lente (Mac qui swappe) : elle lisait le presse-papiers APRÈS sa restauration et
+# collait l'ancien contenu au lieu de la dictée.
+RESTORE_MAX_S = 1.5
+RESTORE_POLL_S = 0.1
 
 def _snapshot_clipboard():
     """Copie tous les items et tous les types (texte, images, RTF…)."""
@@ -89,7 +94,7 @@ def paste_text(text: str, restore_clipboard: bool = True):
     if previous:
 
         def _restore():
-            time.sleep(RESTORE_DELAY_S)
+            wait_until_pasted(text)
             if pb.changeCount() == our_change:  # l'utilisateur n'a pas copié autre chose
                 try:
                     _restore_clipboard(previous)
@@ -97,6 +102,27 @@ def paste_text(text: str, restore_clipboard: bool = True):
                     pass
 
         threading.Thread(target=_restore, daemon=True).start()
+
+def pasted_in(text: str, field) -> bool:
+    """Vrai si le champ relu contient la fin du texte collé (blancs ignorés : le champ
+    rend le texte tel qu'affiché, retours à la ligne compris)."""
+    if not field:
+        return False
+    tail = "".join(text.split())[-40:]
+    return bool(tail) and tail in "".join(field.split())
+
+def wait_until_pasted(text: str, max_s: float = RESTORE_MAX_S, read=None):
+    """Attend que le collage soit visible dans le champ, au plus max_s. Rend True si vu.
+    Champ illisible (VS Code, terminaux…) : on attend simplement max_s."""
+    if read is None:
+        from .learning import read_focused_text as read
+    end = time.time() + max_s
+    while time.time() < end:
+        time.sleep(RESTORE_POLL_S)
+        if pasted_in(text, read()):
+            time.sleep(RESTORE_POLL_S)   # l'app finit de traiter Cmd+V
+            return True
+    return False
 
 def copy_text(text: str):
     _set_clipboard(text)
