@@ -75,6 +75,12 @@ class Transcriber:
         self.last_retry = ""
         self.transcribe(np.zeros(SAMPLE_RATE * 2, dtype=np.float32))  # chauffe
 
+    def weights(self):
+        """Tenseurs des poids, un par un (keep-warm : relus pour rester en RAM)."""
+        from mlx.utils import tree_flatten
+
+        return [w for _, w in tree_flatten(self.session.model.parameters())]
+
     def _decode(self, pcm, lang, context, max_new_tokens=None):
         result = self.session.transcribe(
             pcm,

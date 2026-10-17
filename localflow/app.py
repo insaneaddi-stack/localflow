@@ -22,7 +22,7 @@ import numpy as np
 import rumps
 from AppKit import NSApp, NSImage, NSOperationQueue
 
-from .audio import SAMPLE_RATE, Recorder, audio_stuck
+from .audio import SAMPLE_RATE, Recorder, audio_stuck, hung_close_s
 from .predecode import PreDecoder
 from . import theme
 from . import timetree
@@ -94,10 +94,22 @@ try:
 except OSError:
     _log_file = None
 
+LOG_MAX_BYTES = 5 * 1024 * 1024   # au-delà : le log passe en .1 (une seule sauvegarde)
+_log_lock = threading.Lock()
+
 def _log(msg):
+    global _log_file
     try:
-        with open(LOG_PATH, "a") as f:
-            f.write(f"{datetime.datetime.now():%Y-%m-%d %H:%M:%S} {msg}\n")
+        with _log_lock:
+            with open(LOG_PATH, "a") as f:
+                f.write(f"{datetime.datetime.now():%Y-%m-%d %H:%M:%S} {msg}\n")
+                plein = f.tell() > LOG_MAX_BYTES
+            if plein:
+                os.replace(LOG_PATH, LOG_PATH + ".1")
+                ancien, _log_file = _log_file, open(LOG_PATH, "a")   # faulthandler suit le nouveau fichier
+                faulthandler.register(signal.SIGUSR1, file=_log_file, all_threads=True)
+                if ancien is not None:
+                    ancien.close()
     except OSError:
         pass
 
@@ -192,9 +204,33 @@ def esc_target(recording, finishing, busy, panel_open):
     return None
 
 
-def job_aborted(gen, abort_gen):
-    """Vrai si la dictée numéro `gen` a été annulée (elle ou une plus récente)."""
-    return gen <= abort_gen
+def job_aborted(gen, aborted):
+    """Vrai si la dictée numéro `gen` a été annulée par Esc."""
+    return gen in aborted
+
+
+def esc_victims(capturing, gen, inflight):
+    """Dictées qu'Esc annule. Pendant un enregistrement : celle-là seule — la précédente,
+    peut-être encore en transcription, doit être collée. Sinon : celles en traitement."""
+    return {gen} if capturing else set(inflight)
+
+
+WARM_MAX_S = 600
+WARM_SLOW_S = 1.5
+
+
+def warm_interval(current, took_s):
+    """Intervalle avant la prochaine chauffe : doublé si elle a été lente (poids dans le
+    swap), jusqu'à 10 min ; revient à KEEP_WARM_S dès qu'elle redevient rapide."""
+    if took_s > WARM_SLOW_S:
+        return min(WARM_MAX_S, current * 2)
+    return KEEP_WARM_S
+
+
+def same_app(start_bundle, now_bundle):
+    """Coller seulement dans l'app où la dictée a commencé. Inconnue d'un côté : on colle
+    (mieux vaut le comportement d'avant que de priver l'utilisateur de son texte)."""
+    return not start_bundle or not now_bundle or start_bundle == now_bundle
 
 
 SHIFT_GRACE_S = 0.6      # ⇧ arrivé après fn compte encore comme un accord
@@ -240,6 +276,8 @@ class LocalFlowApp(rumps.App):
         self._local_used = 0.0
         self.engine = voxtral.Engine(self._local_asr, _log, use_api=self._wants_api())
         self._ready = False       # vrai dès qu'une dictée peut être transcrite
+        self._warm_every = KEEP_WARM_S
+        self._warm_next = 0.0
         try:  # icône de l'app (Dock quand une fenêtre est ouverte, Cmd+Tab)
             icon = NSImage.alloc().initWithContentsOfFile_(ICON_PATH)
             if icon:
@@ -258,13 +296,16 @@ class LocalFlowApp(rumps.App):
         self._press_time = None
         self._record_start = 0.0
         self._suppress_next_release = False
-        self._busy = False
+        # Dictées en cours de transcription ou de collage (numéros). Une nouvelle dictée
+        # peut démarrer pendant ce temps : le worker les traite dans l'ordre, les
+        # collages gardent donc l'ordre des dictées.
+        self._inflight = set()
         self._busy_since = 0.0
         # Chaque dictée porte un numéro. Esc note celui qu'il annule, et le
         # worker compare : un job annulé ne colle rien, et un job périmé ne
         # vient pas ranger l'UI d'une dictée plus récente.
         self._gen = 0
-        self._abort_gen = -1
+        self._aborted = set()
         self._start_sound_timer = None
         self._live = None
         self._pre = None           # transcription anticipée des longues dictées
@@ -623,20 +664,37 @@ class LocalFlowApp(rumps.App):
                     self._process(payload)
             except Exception:
                 _log("erreur worker (ignorée):\n" + traceback.format_exc())
-                self._busy = False
+                if kind == "audio":
+                    self._inflight.discard(payload.get("gen"))
 
     def _keep_warm(self):
         """Garde les poids de Qwen3-ASR « chauds » : sous pression mémoire (swap), macOS expulse
-        les pages inutilisées et la dictée suivante met 5–15 s à les recharger."""
+        les pages inutilisées et la dictée suivante met 5–15 s à les recharger.
+
+        Mesuré en octobre 2026 : une inférence de chauffe tenait le verrou du modèle jusqu'à
+        102 s quand les poids étaient dans le swap, et la dictée suivante attendait derrière
+        (jusqu'à 92 s). On relit donc les poids tenseur par tenseur, verrou repris à chaque
+        fois, et on s'arrête dès qu'une dictée commence. Lente, la chauffe s'espace (×2,
+        jusqu'à 10 min) : relire 1,6 Go toutes les 30 s sous swap aggravait le swap."""
+        if time.time() < self._warm_next:
+            return
         if self.recorder.recording or self._busy or self.meeting_rec.active or self.transcriber is None:
             return
         try:
+            import mlx.core as mx
+
             t0 = time.time()
-            with self.model_lock:
-                self.transcriber.transcribe(np.zeros(SAMPLE_RATE // 2, dtype=np.float32), language="fr")
+            for w in self.transcriber.weights():
+                if self.recorder.recording or not self._jobs.empty():
+                    return   # une dictée passe avant ; la chauffe reprendra au prochain tour
+                with self.model_lock:
+                    mx.eval(w.sum())
             dt = time.time() - t0
-            if 1.5 < dt < 120:   # au-delà : le Mac dormait pendant l'inférence, pas une lenteur réelle
-                _log(f"keep-warm lent ({dt:.1f}s) : modèle rechargé depuis le swap — {_mem_state()}")
+            self._warm_every = warm_interval(self._warm_every, dt)
+            self._warm_next = time.time() + self._warm_every
+            if 1.5 < dt < 120:   # au-delà : le Mac dormait pendant la chauffe, pas une lenteur réelle
+                _log(f"keep-warm lent ({dt:.1f}s) : modèle rechargé depuis le swap — {_mem_state()}"
+                     f" — prochain dans {self._warm_every:.0f}s")
         except Exception:
             pass
 
@@ -723,17 +781,21 @@ class LocalFlowApp(rumps.App):
 
     # ---------- touche fn ----------
 
+    @property
+    def _busy(self):
+        return bool(self._inflight)
+
     def _on_fn_down(self, shift=False):
-        if self._busy and time.time() - self._busy_since > BUSY_TIMEOUT_S:
-            _log("watchdog: pipeline coincé, déblocage forcé")
-            self._busy = False
         if self.hands_free:
             self.hands_free = False
             self._suppress_next_release = True
             self._finish_recording()
             return
-        if not self._ready or self._busy or self._finishing:
-            _log(f"fn ignoré (modèle prêt: {self._ready}, busy: {self._busy})")
+        # Ni une dictée en cours de transcription, ni un modèle pas encore chargé
+        # n'empêchent d'enregistrer : le job attend son tour dans la file du worker.
+        # Seuls les TAIL_S (0,35 s) de fin de la dictée précédente bloquent encore.
+        if self._finishing:
+            _log("fn ignoré (fin de la dictée précédente, 0,35 s)")
             return
         self._mode = dictation_mode(shift, self.config.calendar_enabled)
         _log("fn down" + (" + ⇧ → agenda" if self._mode == "calendar" else ""))
@@ -780,8 +842,10 @@ class LocalFlowApp(rumps.App):
         _notify("YouTube", "Transcript en cours…")
 
         def local(audio):
+            # Vidéo publique : Voxtral sans souci de vie privée. Un 429 (longue vidéo,
+            # 60 requêtes/min) bascule tout seul sur Qwen local pour la suite.
             with self.model_lock:
-                return self._local_asr().transcribe(audio, prompt=self._asr_prompt())
+                return self.engine.transcribe(audio, prompt=self._asr_prompt())
 
         def progress(p):
             self._yt_status = f"Local · {int(p * 100)} %"
@@ -844,8 +908,9 @@ class LocalFlowApp(rumps.App):
                                 self.overlay.state == "expanded")
             if target == "dictation":
                 # Posé ici, pas dans _cancel_dictation : le worker peut coller
-                # d'un instant à l'autre et il lit ce numéro, pas l'UI.
-                self._abort_gen = self._gen
+                # d'un instant à l'autre et il lit ces numéros, pas l'UI.
+                self._aborted.update(esc_victims(self.recorder.recording or self._finishing,
+                                                 self._gen, self._inflight))
                 _on_main(self._cancel_dictation)
                 return True     # avalé : l'app active ne voit pas l'Esc
             if target == "panel":
@@ -942,6 +1007,13 @@ class LocalFlowApp(rumps.App):
                 _notify("AUR'IAFLOW redémarre", "La couche audio de macOS s'est figée : redémarrage automatique (~10 s).")
                 threading.Timer(1.2, lambda: os._exit(86)).start()
                 return
+            # Fermeture de flux figée : elle ne bloque plus rien (audio.close_input_stream),
+            # mais le fil figé ne reviendra pas. On redémarre seulement au repos (~1 s avec
+            # Voxtral) : jamais pendant une dictée, une réunion ou un traitement.
+            if hung_close_s() > 12 and not (self.recorder.recording or self._finishing or self._busy
+                                            or self.meeting_rec.active or self.hands_free):
+                _log(f"fermeture du micro figée depuis {hung_close_s():.0f}s (CoreAudio) → redémarrage au repos")
+                os._exit(86)
             if self._lost_fn_release():
                 _log("santé: relâchement de fn perdu → on termine la dictée")
                 self.listener.release()   # le tap croit encore la touche enfoncée
@@ -989,7 +1061,7 @@ class LocalFlowApp(rumps.App):
                 self._finish_now()
             if self._busy and time.time() - self._busy_since > BUSY_TIMEOUT_S:
                 _log("santé: pipeline coincé, déblocage forcé")
-                self._busy = False
+                self._inflight.clear()
                 self.overlay.hide()
                 self._set_icon(self._idle_state())
 
@@ -1120,12 +1192,9 @@ class LocalFlowApp(rumps.App):
         de réflexe coûterait l'enregistrement entier. Le bouton « Arrêter » du
         panneau reste le seul chemin.
         """
-        self._abort_gen = self._gen
         self.hands_free = False
         self._finishing = False
-        # `_busy` est libéré tout de suite pour que fn reparte sans attendre la
-        # fin du décodage ; le job en vol se reconnaîtra périmé à son numéro.
-        self._busy = False
+        # Les jobs annulés sont déjà notés (_on_key) ; ils se reconnaîtront à leur numéro.
         if self.recorder.recording:
             self._cancel_recording()
         else:
@@ -1162,7 +1231,7 @@ class LocalFlowApp(rumps.App):
 
     def _finish_now(self):
         self._finishing = False
-        if job_aborted(self._gen, self._abort_gen):
+        if job_aborted(self._gen, self._aborted):
             # Esc est tombé pendant les TAIL_S : le minuteur arrive après la bataille.
             return
         audio = self.recorder.stop()
@@ -1202,7 +1271,7 @@ class LocalFlowApp(rumps.App):
         self.overlay.show("processing")
         rest_s = (len(audio) - (pre.committed if pre else 0)) / SAMPLE_RATE
         self.overlay.begin_progress(self._decode_estimate(rest_s))
-        self._busy = True
+        self._inflight.add(self._gen)
         self._busy_since = time.time()
         self._jobs.put(("audio", {"audio": audio, "live": self._live, "app": self._ctx_app,
                                   "voiced": voiced, "gen": self._gen, "mode": self._mode, "pre": pre}))
@@ -1234,7 +1303,7 @@ class LocalFlowApp(rumps.App):
         mode = job.get("mode", "dictation")
         self._save_debug(audio)
         try:
-            if job_aborted(gen, self._abort_gen):
+            if job_aborted(gen, self._aborted):
                 if live is not None:
                     live.abort = True
                 _log("annulé (Esc) : dictée jetée avant transcription")
@@ -1263,10 +1332,11 @@ class LocalFlowApp(rumps.App):
                     source = self.engine.name
             # Dernier contrôle avant tout effet de bord : Esc a pu tomber
             # pendant le décodage, qui n'est pas interruptible en cours de route.
-            if job_aborted(gen, self._abort_gen):
+            if job_aborted(gen, self._aborted):
                 _log("annulé (Esc) : transcription jetée, rien n'est collé")
                 return
-            _on_main(self.overlay.end_progress)
+            if gen == self._gen:   # une dictée plus récente a pris l'overlay : on n'y touche pas
+                _on_main(self.overlay.end_progress)
 
             seconds = len(audio) / SAMPLE_RATE
             if text and len(text.split()) > seconds * 4.5 + 4:   # > 4,5 mots/s : impossible
@@ -1294,14 +1364,21 @@ class LocalFlowApp(rumps.App):
                 press_undo()
                 _log("commande vocale : annulation (Cmd+Z)")
             elif text:
-                if should_type(bundle):
+                if not same_app(bundle, frontmost_app()[0]):
+                    # L'app a changé pendant la transcription (dictée lente, ou on est
+                    # passé ailleurs) : coller ici irait dans la mauvaise fenêtre.
+                    copy_text(text)
+                    how = "copié (app changée)"
+                    _notify("Dictée prête, copiée", f"{app_name or 'L’app de départ'} n'est plus au premier plan : ⌘V pour la coller.")
+                elif should_type(bundle):
                     # Terminal : un retour à la ligne tapé = Entrée = commande lancée.
                     type_text(re.sub(r"\s*\n+(?:- )?", " ", text))
                     how = "tapé"
                 else:
                     paste_text(text)
                     how = "collé"
-                self.learner.remember_paste(text, bundle)
+                if how != "copié (app changée)":
+                    self.learner.remember_paste(text, bundle)
                 _on_main(lambda: self.tutorial.event("dictated"))
                 words = len(text.split())
                 self.config.add_history(text, app=app_name)
@@ -1329,11 +1406,11 @@ class LocalFlowApp(rumps.App):
             except Exception:
                 pass
 
-            # Un job périmé (Esc, puis nouvelle dictée lancée aussitôt) ne doit
-            # ni relâcher `_busy` ni ranger l'overlay : ils appartiennent à la
-            # dictée en cours, pas à celle qu'on vient d'abandonner.
+            # Un job dépassé par une dictée plus récente ne range pas l'overlay :
+            # il appartient à la dictée en cours, pas à celle-ci.
+            self._inflight.discard(gen)
+            self._aborted.discard(gen)
             if gen == self._gen:
-                self._busy = False
 
                 def done():
                     self.overlay.hide()
@@ -1379,7 +1456,7 @@ class LocalFlowApp(rumps.App):
 
         with self.model_lock:
             event = self.calendar.parse(text)
-        if job_aborted(gen, self._abort_gen):
+        if job_aborted(gen, self._aborted):
             _log("agenda : annulé (Esc) pendant la lecture de la phrase")
             return
 
@@ -1410,7 +1487,7 @@ class LocalFlowApp(rumps.App):
 
         fin = time.time() + delai
         while time.time() < fin:
-            if job_aborted(gen, self._abort_gen):
+            if job_aborted(gen, self._aborted):
                 _log("agenda : annulé (Esc) pendant l'aperçu, rien n'a été écrit")
                 client.close()
                 _on_main(self.overlay.end_calendar_preview)

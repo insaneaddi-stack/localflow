@@ -61,7 +61,7 @@ Avec une clé Mistral, la dictée part vers **Voxtral** (`voxtral-mini-latest`, 
 - **Repli silencieux** : réseau coupé, délai dépassé (6 s + 0,15 s par seconde d'audio), 429, erreur serveur ou résultat vide → la même dictée est transcrite par Qwen local, chargé à ce moment-là. Après une panne, 1 min en local direct. Qwen est libéré après 10 min sans servir.
 - **Vocabulaire** : dictionnaire + corrections apprises envoyés en `context_bias`. Langue : détection automatique (français et anglais).
 - **Réglages** (`~/.localflow.json`) : `"engine": "voxtral"` ou `"local"` (aussi dans le menu : *Voxtral en ligne*), `"local_preload": true` pour garder Qwen chargé quand même (repli instantané).
-- **Réunions, direct et YouTube restent en local**.
+- **Réunions et direct restent en local** (les voix des autres participants ne partent pas). YouTube sans sous-titres passe par Voxtral (vidéo publique), Qwen si quota atteint.
 - **Vie privée** : l'audio des dictées est envoyé à Mistral. Désactive l'utilisation de tes données pour l'entraînement dans les réglages de confidentialité de la console Mistral (console.mistral.ai). Sans clé, rien ne quitte le Mac.
 
 ## Commandes utiles

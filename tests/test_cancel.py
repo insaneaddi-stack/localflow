@@ -15,7 +15,7 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 try:
-    from localflow.app import ESC_KEYCODE, esc_target, job_aborted
+    from localflow.app import ESC_KEYCODE, esc_target, esc_victims, job_aborted, same_app, warm_interval
 except ImportError as exc:                              # AppKit/rumps absents
     raise unittest.SkipTest(f"localflow.app non importable ici : {exc}")
 
@@ -48,18 +48,40 @@ class EscTarget(unittest.TestCase):
 
 class JobAborted(unittest.TestCase):
     def test_annulee(self):
-        self.assertTrue(job_aborted(3, 3))          # Esc sur cette dictée-ci
-
-    def test_perimee(self):
-        self.assertTrue(job_aborted(2, 3))          # une dictée plus récente a été annulée
+        self.assertTrue(job_aborted(3, {3}))         # Esc sur cette dictée-ci
 
     def test_vivante(self):
-        self.assertFalse(job_aborted(4, 3))         # lancée après l'annulation
-        self.assertFalse(job_aborted(1, -1))        # aucune annulation
+        self.assertFalse(job_aborted(4, {3}))        # lancée après l'annulation
+        self.assertFalse(job_aborted(1, set()))      # aucune annulation
 
-    def test_aucune_annulation_par_defaut(self):
-        """_abort_gen part à -1 : la toute première dictée (gen 1) doit vivre."""
-        self.assertFalse(job_aborted(1, -1))
+    def test_precedente_encore_en_transcription_survit(self):
+        """Dictée 2 lancée pendant que la 1 se transcrit, Esc pendant la 2 :
+        seule la 2 est jetée, la 1 doit être collée."""
+        self.assertEqual(esc_victims(True, 2, {1}), {2})
+        self.assertFalse(job_aborted(1, esc_victims(True, 2, {1})))
+
+    def test_esc_sans_enregistrement_annule_ce_qui_se_transcrit(self):
+        self.assertEqual(esc_victims(False, 2, {1, 2}), {1, 2})
+
+
+class MemeApp(unittest.TestCase):
+    def test_coller_seulement_dans_l_app_de_depart(self):
+        self.assertTrue(same_app("com.google.Chrome", "com.google.Chrome"))
+        self.assertFalse(same_app("com.google.Chrome", "com.microsoft.VSCode"))
+
+    def test_app_inconnue_on_colle(self):
+        self.assertTrue(same_app("", "com.google.Chrome"))
+        self.assertTrue(same_app("com.google.Chrome", ""))
+
+
+class KeepWarm(unittest.TestCase):
+    def test_lente_double_jusqu_a_10_min(self):
+        self.assertEqual(warm_interval(30, 5.0), 60)
+        self.assertEqual(warm_interval(480, 40.0), 600)
+        self.assertEqual(warm_interval(600, 40.0), 600)
+
+    def test_rapide_revient_a_30_s(self):
+        self.assertEqual(warm_interval(600, 0.2), 30)
 
 
 if __name__ == "__main__":
