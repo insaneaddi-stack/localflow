@@ -95,8 +95,7 @@ class Summarizer:
                     self._model, self._tok, self._loaded_id = sh._model, sh._tokenizer, mid
                     return
                 from mlx_lm import load
-                if self.model_key != "qwen-1.7b":
-                    os.environ.pop("HF_HUB_OFFLINE", None)   # téléchargement à la demande
+                os.environ.pop("HF_HUB_OFFLINE", None)   # téléchargement à la demande, plus à l'installation
                 self._model, self._tok = load(mid)
                 self._loaded_id = mid
                 self._log(f"résumé : modèle {mid} chargé")

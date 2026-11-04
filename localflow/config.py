@@ -32,7 +32,7 @@ DEFAULTS = {
     "calendar_mcp_path": "",     # chemin vers dist/index.js du serveur MCP TimeTree (./install-timetree.sh)
     "decode_times": [],          # [[durée audio s, temps de décodage s]] : calibre la barre de progression
     "stats": {},                 # {"YYYY-MM-DD": {"words": n, "dictations": n, "audio_s": s}}
-    "engine": "voxtral",         # "voxtral" (API Mistral, repli Qwen local) ou "local" (Qwen seul)
+    "engine": "voxtral",         # historique : Voxtral est le seul moteur
     "local_preload": False,      # charger Qwen dès le démarrage même avec Voxtral (repli instantané, +1,6 Go)
 }
 

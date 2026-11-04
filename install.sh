@@ -174,33 +174,25 @@ celebrate() {  # petite pluie d'étincelles autour de l'orbe
 # ─── écran ───────────────────────────────────────────────────────────────────
 tput smcup 2>/dev/null; tput civis; clear
 printf '\033[%d;%dr' $((TEXT_ROW+1)) $ROWS   # région de défilement (1-based) : bannière et orbe fixes
-at 2 3;  gradient_text "L O C A L F L O W"; printf '   %s%s%s' "$D" "dictée vocale · locale · hors-ligne" "$N"
+at 2 3;  gradient_text "L O C A L F L O W"; printf '   %s%s%s' "$D" "dictée vocale · propulsée par Voxtral" "$N"
 at 4 3;  printf '%sMaintiens %sfn%s%s, parle, relâche : c'"'"'est collé.%s' "$(c 250)" "$N$B" "$N" "$(c 250)" "$N"
-at 5 3;  printf '%sRien ne quitte ton Mac. 5 à 10 min, je te guide.%s' "$(c 250)" "$N"
+at 5 3;  printf '%sTon audio est transcrit par Voxtral (Mistral). 3 à 5 min, je te guide.%s' "$(c 250)" "$N"
 at 7 3;  printf '%s%s%s' "$(c 237)" "$(printf '─%.0s' $(seq 1 $BANNER_W))" "$N"
 orb_frame 0 wait
 : > "$LOG"
 
 # 1 ── le Mac
-step "1/4" "Ton Mac"
+step "1/3" "Ton Mac"
 if [ "$(uname -s)" != "Darwin" ] || [ "$(uname -m)" != "arm64" ]; then ko "LocalFlow nécessite un Mac Apple Silicon (M1, M2, M3, M4…)."; exit 1; fi
 CHIP="$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo 'Apple Silicon')"
 RAM=$(( $(sysctl -n hw.memsize) / 1073741824 )); FREE=$(df -g "$HOME" | awk 'NR==2{print $4}')
 if [ "$(sw_vers -productVersion | cut -d. -f1)" -lt 14 ]; then ko "Il faut macOS 14 (Sonoma) ou plus récent — tu as macOS $(sw_vers -productVersion). Mets à jour ton Mac, puis relance."; exit 1; fi
 ok "$CHIP · ${RAM} Go de RAM · macOS $(sw_vers -productVersion)"
-if [ "$FREE" -lt 8 ]; then ko "Il faut 8 Go libres (tu en as ${FREE}). Libère de la place puis relance la commande."; exit 1; fi
+if [ "$FREE" -lt 4 ]; then ko "Il faut 4 Go libres (tu en as ${FREE}). Libère de la place puis relance la commande."; exit 1; fi
 ok "${FREE} Go libres sur le disque"
 
-# 2 ── le choix
-step "2/4" "Quelle version ?"
-say "   $B 1 $N Complète   $(c $MUT)recommandée · ~2,6 Go · nettoyage IA en option$N"
-say "   $B 2 $N Légère     $(c $MUT)~1,6 Go · parfaite si 8 Go de RAM$N"
-ask "Ton choix, puis Entrée  [1] : "
-MIN=""; [ "$ANSWER" = "2" ] && MIN="--minimal"
-ok "Version $([ -n "$MIN" ] && echo légère || echo complète)"
-
-# 3 ── l'installation
-step "3/4" "Installation  $(c $MUT)— laisse tourner (détails : ~/.localflow-install.log)$N"
+# 2 ── l'installation (aucun modèle à télécharger : tout passe par Voxtral)
+step "2/3" "Installation  $(c $MUT)— laisse tourner (détails : ~/.localflow-install.log)$N"
 mkdir -p "$DEST"
 dl() { local tmp src; tmp="$(mktemp -d)"
   curl -fsSL "https://github.com/$REPO/archive/refs/heads/main.tar.gz" | tar -xz -C "$tmp" || return 1
@@ -212,12 +204,10 @@ run "Téléchargement de LocalFlow" work dl || exit 1
 cd "$DEST" 2>/dev/null || { [ "$DEMO" = 1 ] || exit 1; }
 export LOCALFLOW_WIZARD=1
 run "Python et dépendances" work ./setup.sh --only-python || exit 1
-run "Modèle vocal  (~1,6 Go, le plus long)" work ./setup.sh --only-asr || exit 1
-[ -z "$MIN" ] && { run "Modèle de nettoyage IA  (~1 Go)" work ./setup.sh --only-qwen || exit 1; }
-run "Application + démarrage automatique" work ./setup.sh --only-app $MIN || exit 1
+run "Application + démarrage automatique" work ./setup.sh --only-app || exit 1
 
-# 4 ── les autorisations
-step "4/4" "Deux autorisations macOS  $(c $MUT)— une seule fois$N"
+# 3 ── les autorisations et la clé
+step "3/3" "Deux autorisations macOS et ta clé Voxtral  $(c $MUT)— une seule fois$N"
 if [ "$DEMO" = 1 ]; then doctor() { (( ++DEMO_N > 25 )); }; DEMO_N=0
 else
   PYV="$(.venv/bin/python -c 'import sys;print(f"{sys.version_info[0]}.{sys.version_info[1]}")')"
@@ -235,6 +225,12 @@ say "$B Micro$N  $(c $MUT)— clique Autoriser, puis OK sur « LocalFlow souhait
 if wait_until wait 300 20 "Pas de fenêtre ? Réglages → Confidentialité → Micro → LocalFlow." doctor microphone; then
   ok "Micro accordé"
 else ko "Micro non accordé — active-le dans Réglages → Micro, LocalFlow marchera aussitôt."; fi
+blank
+say "$B Clé Voxtral$N  $(c $MUT)— LocalFlow t'ouvre une fenêtre : copie ta clé Mistral (⌘C), clique « Coller la clé »$N"
+say "   $(c $MUT)Pas encore de clé ? Clique « Ouvrir la console » → API Keys → Create new key (1 min, centimes par heure de dictée).$N"
+if wait_until wait 600 30 "J'attends ta clé… (fenêtre « Clé Voxtral », ou plus tard : menu de la barre → Clé Voxtral…)" doctor voxtral; then
+  ok "Clé Voxtral enregistrée"
+else ko "Pas de clé pour l'instant — ajoute-la plus tard : menu de la barre → Clé Voxtral…"; fi
 blank
 say "$B Réunions$N  $(c $MUT)— le son de l'appel (Zoom, Meet…) demande une 3e autorisation,$N"
 say "   $(c $MUT)« Enregistrement audio système », proposée par macOS à ta première réunion.$N"

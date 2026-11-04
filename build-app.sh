@@ -67,8 +67,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleIconFile</key><string>LocalFlow</string>
     <key>LSUIElement</key><true/>
     <key>NSHighResolutionCapable</key><true/>
-    <key>NSMicrophoneUsageDescription</key><string>AUR'IAFLOW écoute ta voix pour la dicter, 100 % en local.</string>
-    <key>NSAudioCaptureUsageDescription</key><string>AUR'IAFLOW enregistre le son de tes réunions (Zoom, Meet, Teams…) pour les transcrire, 100 % en local.</string>
+    <key>NSMicrophoneUsageDescription</key><string>AUR'IAFLOW écoute ta voix et l'envoie à Voxtral (Mistral) pour la transcrire.</string>
+    <key>NSAudioCaptureUsageDescription</key><string>AUR'IAFLOW enregistre le son de tes réunions (Zoom, Meet, Teams…) et l'envoie à Voxtral (Mistral) pour le transcrire.</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
 </dict></plist>
 PLIST

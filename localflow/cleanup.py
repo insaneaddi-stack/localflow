@@ -18,6 +18,7 @@ Deux étages :
 """
 
 import difflib
+import os
 import re
 import threading
 import unicodedata
@@ -456,7 +457,8 @@ def _guard_ok(output: str, source: str, allowed: set) -> bool:
 
 
 class Cleaner:
-    """Charge Qwen3-1.7B-4bit à la première utilisation (~1 Go RAM)."""
+    """Nettoyage IA (option) : Qwen3-1.7B-4bit, téléchargé une fois (~1 Go) quand on l'active,
+    puis ~1 Go de RAM. Tant qu'il n'est pas chargé, les dictées passent par les règles seules."""
 
     def __init__(self):
         self._model = None
@@ -474,6 +476,7 @@ class Cleaner:
             if self._model is None:
                 from mlx_lm import load
 
+                os.environ.pop("HF_HUB_OFFLINE", None)   # téléchargé à la demande, plus à l'installation
                 self._model, self._tokenizer = load(LLM_MODEL_ID)
 
     def clean(self, text: str, tone: str = "neutral", vocab=None) -> str:
@@ -489,7 +492,8 @@ class Cleaner:
         text = pre
         vocab = list(vocab or [])
         try:
-            self._load()
+            if self._model is None:   # chargement/téléchargement en cours : on ne bloque pas la dictée
+                return text
             from mlx_lm import generate
 
             system = SYSTEM_PROMPT

@@ -2,7 +2,7 @@
 
 1. Sous-titres déjà publiés par YouTube (manuels, sinon automatiques) via yt-dlp :
    instantané, quelle que soit la durée.
-2. Sinon, on télécharge seulement l'audio et Qwen3-ASR le transcrit en local, par
+2. Sinon, on télécharge seulement l'audio et Voxtral le transcrit, par
    segments coupés sur les pauses (même découpe que les longues dictées).
 
 Le texte part dans le presse-papier et dans ~/Documents/LocalFlow Transcripts/<titre>.md.
@@ -144,7 +144,7 @@ def fetch(url, transcribe=None, progress=None):
         audio = _audio(ytdlp, ffmpeg, url, tmp)
         if audio is None or not len(audio):
             raise RuntimeError("audio introuvable")
-        return title, transcribe_local(audio, transcribe, progress), "transcrit en local"
+        return title, transcribe_local(audio, transcribe, progress), "transcrit par Voxtral"
 
 
 def save(title, url, text, source):

@@ -42,7 +42,7 @@ from .summarize import MODELS as SUMMARY_MODELS, Summarizer
 from . import sounds
 from . import sysaudio
 from . import update
-from . import voxtral
+from . import keydialog, voxtral
 from .tutorial import Tutorial
 from .overlay import Overlay
 from .permissions import PermissionsWindow
@@ -61,6 +61,7 @@ TAIL_S = 0.35            # audio conservé après le relâchement (dernier mot)
 # frais, une dictée est en cours et un kickstart -k la ferait disparaître —
 # c'est arrivé trois fois le 2 septembre, dont une après 25 s de parole.
 BUSY_FILE = os.path.expanduser("~/Library/Caches/LocalFlow/busy")
+FAILED_DIR = os.path.expanduser("~/Library/Caches/LocalFlow/perdues")
 DEBUG_WAV = os.path.expanduser("~/Library/Caches/LocalFlow/last.wav")  # dernière dictée, pour diagnostiquer
 MIN_AUDIO_S = 0.35       # ignore les enregistrements plus courts
 MIN_VOICED_S = 0.12      # seuil bas : le détecteur ne compte que les pics (silence pur = 0,00 s)
@@ -274,7 +275,7 @@ class LocalFlowApp(rumps.App):
         self.transcriber = None   # Qwen3-ASR : repli de Voxtral, direct et réunions — chargé à la demande
         self._local_lock = threading.Lock()
         self._local_used = 0.0
-        self.engine = voxtral.Engine(self._local_asr, _log, use_api=self._wants_api())
+        self.engine = voxtral.Engine(_log)
         self._ready = False       # vrai dès qu'une dictée peut être transcrite
         self._warm_every = KEEP_WARM_S
         self._warm_next = 0.0
@@ -314,11 +315,8 @@ class LocalFlowApp(rumps.App):
         # ---- menu ----
         self.item_status = rumps.MenuItem("Chargement du modèle…")
         self.item_stats = rumps.MenuItem("Statistiques : —", callback=self._open_history)
-        self.item_engine = rumps.MenuItem("Voxtral en ligne (repli local auto)", callback=self._toggle_engine)
-        self.item_engine.state = self.config.engine == "voxtral"
         self.item_cleanup = self._toggle_item("Nettoyage IA", "cleanup_enabled", self._toggle_cleanup)
-        self.item_live = self._toggle_item("Transcription en direct", "live_enabled")
-        self.item_fast = self._toggle_item("Coller le texte du direct (moins précis)", "live_paste_fast")
+        self.item_key = rumps.MenuItem("Clé Voxtral…", callback=self._ask_key)
         self.item_tone = self._toggle_item("Ton adapté à l'app", "tone_auto")
         self.item_sounds = self._toggle_item("Sons", "sounds_enabled")
         self.item_mic = self._toggle_item("Micro toujours prêt (point orange permanent)", "mic_always_on", self._toggle_mic)
@@ -369,15 +367,13 @@ class LocalFlowApp(rumps.App):
             self.item_dict,
             self.item_meet,
             None,
-            self.item_engine,
             self.item_cleanup,
             self.item_tone,
-            self.item_live,
-            self.item_fast,
             self.item_sounds,
             self.item_mic,
             self.item_calendar,
             None,
+            self.item_key,
             self.item_perms,
             self.item_tutorial,
             self.item_update,
@@ -591,51 +587,24 @@ class LocalFlowApp(rumps.App):
         return efface
 
     def _worker(self):
-        """Thread de traitement. Ne meurt jamais : relance le chargement du
-        modèle en cas d'échec, et survit à toute erreur d'un job."""
-        delay = 5
-        notified = False
-        repare = False
-        while self.transcriber is None and (not self.engine.use_api or self.config.local_preload):
-            try:
-                self._local_asr()
-            except Exception as exc:
-                _log("échec chargement du moteur:\n" + traceback.format_exc())
-                # Une seule tentative de réparation : si elle ne suffit pas, le
-                # problème est ailleurs (réseau, disque plein) et effacer en
-                # boucle ne ferait que retélécharger sans fin.
-                if not repare and "Incomplete" in type(exc).__name__:
-                    repare = True
-                    if self._repair_model_cache():
-                        _log("cache modèle réparé, nouvelle tentative immédiate")
-                        delay = 5
-                        continue
-                # Une seule notification : la boucle peut tourner des heures (modèle en
-                # cours de téléchargement, disque plein…), inutile de noyer le Centre de
-                # notifications. L'état reste visible dans le menu et dans le log.
-                if not notified:
-                    _notify("Modèle indisponible", f"AUR'IAFLOW réessaie en boucle — {exc}")
-                    notified = True
-                _on_main(lambda d=delay: setattr(self.item_status, "title", f"Modèle indisponible — nouvel essai dans {d} s"))
-                time.sleep(delay)
-                delay = min(delay * 2, 60)
-
+        """Thread de traitement. Ne meurt jamais : survit à toute erreur d'un job."""
         def ready():
             self._set_icon(self._idle_state())
-            self.item_status.title = "Prêt — maintenir fn, ou fn+espace"
             first = not self.config.data.get("onboarded")
+            after = self.tutorial.show if first else None
+            if voxtral.api_key():
+                self.item_status.title = "Prêt — maintenir fn, ou fn+espace"
+            else:   # première installation : la clé se demande juste après les autorisations
+                self.item_status.title = "Clé Voxtral manquante — menu « Clé Voxtral… »"
+                after = lambda then=after: self._ask_key(then=then)
             if self.perms.missing():
-                self.perms.show(on_done=(self.tutorial.show if first else None))
-            elif first:
-                self.tutorial.show()
+                self.perms.show(on_done=after)
+            elif after:
+                after()
 
         self._ready = True
         _on_main(ready)
-        if self.engine.use_api:
-            _log("démarrage: moteur voxtral, repli qwen3-asr "
-                 + ("chargé" if self.transcriber is not None else "à la demande") + ", prêt")
-        else:
-            _log(f"démarrage: moteur {self.transcriber.name} chargé, prêt")
+        _log("démarrage: moteur voxtral, prêt")
         try:
             os.remove(CRASH_FILE)      # démarrage réussi : l'ardoise est effacée
         except OSError:
@@ -651,10 +620,7 @@ class LocalFlowApp(rumps.App):
                 try:
                     kind, payload = self._jobs.get(timeout=KEEP_WARM_S)
                 except queue.Empty:
-                    if self.engine.use_api and not self.config.local_preload:
-                        self._unload_local_if_idle()
-                    else:
-                        self._keep_warm()
+                    self._unload_local_if_idle()   # Qwen n'est chargé que par les réunions
                     continue
                 if kind == "preload":
                     self.cleaner.preload()
@@ -698,8 +664,24 @@ class LocalFlowApp(rumps.App):
         except Exception:
             pass
 
-    def _wants_api(self):
-        return self.config.engine == "voxtral" and bool(voxtral.api_key())
+    def _ask_key(self, _item=None, then=None):
+        """Fenêtre de saisie de la clé Voxtral : menu, premier lancement, ou dictée sans clé."""
+        if getattr(self, "_key_dialog_open", False):
+            return
+        self._key_dialog_open = True
+
+        def run():
+            try:
+                if keydialog.ask_key(_notify) and self.item_status.title.startswith("Clé Voxtral"):
+                    _on_main(lambda: setattr(self.item_status, "title", "Prêt — maintenir fn, ou fn+espace"))
+            except Exception:
+                _log("saisie de la clé Voxtral:\n" + traceback.format_exc())
+            finally:
+                self._key_dialog_open = False
+            if then:
+                _on_main(then)
+
+        threading.Thread(target=run, daemon=True, name="cle-voxtral").start()
 
     def _local_asr(self):
         """Qwen3-ASR, chargé à la première demande (repli de Voxtral, réunions, YouTube)."""
@@ -727,16 +709,6 @@ class LocalFlowApp(rumps.App):
         gc.collect()
         mx.clear_cache()
         _log(f"qwen3-asr libéré ({LOCAL_IDLE_S // 60} min sans servir)")
-
-    def _toggle_engine(self, item):
-        item.state = not item.state
-        self.config.engine = "voxtral" if item.state else "local"
-        self.engine.use_api = self._wants_api()
-        if item.state and not self.engine.use_api:
-            _notify("Voxtral indisponible", "Clé Mistral absente du trousseau (service localflow-mistral) : Qwen local reste le moteur.")
-        if not self.engine.use_api:
-            self._jobs.put(("load_local", None))   # Qwen redevient le moteur : on le charge maintenant
-        _log(f"moteur : {'voxtral' if self.engine.use_api else 'local'}")
 
     # ---------- estimation du temps de décodage ----------
 
@@ -843,12 +815,12 @@ class LocalFlowApp(rumps.App):
 
         def local(audio):
             # Vidéo publique : Voxtral sans souci de vie privée. Un 429 (longue vidéo,
-            # 60 requêtes/min) bascule tout seul sur Qwen local pour la suite.
+            # 60 requêtes/min) : l'engine redemande après une pause.
             with self.model_lock:
                 return self.engine.transcribe(audio, prompt=self._asr_prompt())
 
         def progress(p):
-            self._yt_status = f"Local · {int(p * 100)} %"
+            self._yt_status = f"Voxtral · {int(p * 100)} %"
 
         def work():
             try:
@@ -1279,10 +1251,17 @@ class LocalFlowApp(rumps.App):
 
     # ---------- pipeline ----------
 
+    @staticmethod
+    def _write_wav(path, audio):
+        import wave
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with wave.open(path, "wb") as w:
+            w.setnchannels(1); w.setsampwidth(2); w.setframerate(SAMPLE_RATE)
+            w.writeframes((np.clip(audio, -1, 1) * 32767).astype(np.int16).tobytes())
+
     def _save_debug(self, audio):
         """Garde les 5 derniers enregistrements (last.wav = le plus récent) pour diagnostiquer."""
         try:
-            import wave
             d = os.path.dirname(DEBUG_WAV)
             os.makedirs(d, exist_ok=True)
             for i in range(4, 0, -1):
@@ -1290,11 +1269,33 @@ class LocalFlowApp(rumps.App):
                 dst = os.path.join(d, f"last-{i + 1}.wav")
                 if os.path.exists(src):
                     os.replace(src, dst)
-            with wave.open(DEBUG_WAV, "wb") as w:
-                w.setnchannels(1); w.setsampwidth(2); w.setframerate(SAMPLE_RATE)
-                w.writeframes((np.clip(audio, -1, 1) * 32767).astype(np.int16).tobytes())
+            self._write_wav(DEBUG_WAV, audio)
         except Exception:
             pass
+
+    def _keep_failed(self, audio):
+        """Dictée non transcrite : l'audio reste dans perdues/, hors de la rotation des 5 derniers."""
+        try:
+            path = os.path.join(FAILED_DIR, time.strftime("%Y-%m-%d_%H-%M-%S") + ".wav")
+            self._write_wav(path, audio)
+            return path
+        except Exception:
+            return ""
+
+    def _retry_failed(self, path, audio, app_name):
+        """Redemande une dictée perdue à Voxtral ; réussie, elle entre dans l'Historique."""
+        text = voxtral.retry_later(self.engine, audio, self._asr_prompt())
+        if not text:
+            return   # toujours rien : l'audio reste dans perdues/
+        text = cleanup_rules(self.learner.apply(self.dictionary.apply(text)))
+        self.config.add_history(text, app=app_name)
+        _on_main(self.history_window.refresh)
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        _log(f"dictée retrouvée après échec ({len(text.split())} mots)")
+        _notify("Dictée retrouvée", "Elle est dans l'Historique.")
 
     def _process(self, job):
         audio, live, (bundle, app_name) = job["audio"], job["live"], job["app"]
@@ -1302,6 +1303,7 @@ class LocalFlowApp(rumps.App):
         gen = job.get("gen", 0)
         mode = job.get("mode", "dictation")
         self._save_debug(audio)
+        text = ""
         try:
             if job_aborted(gen, self._aborted):
                 if live is not None:
@@ -1364,6 +1366,8 @@ class LocalFlowApp(rumps.App):
                 press_undo()
                 _log("commande vocale : annulation (Cmd+Z)")
             elif text:
+                # Dans l'historique avant de coller : un collage qui plante ne perd plus la dictée.
+                self.config.add_history(text, app=app_name)
                 if not same_app(bundle, frontmost_app()[0]):
                     # L'app a changé pendant la transcription (dictée lente, ou on est
                     # passé ailleurs) : coller ici irait dans la mauvaise fenêtre.
@@ -1381,7 +1385,6 @@ class LocalFlowApp(rumps.App):
                     self.learner.remember_paste(text, bundle)
                 _on_main(lambda: self.tutorial.event("dictated"))
                 words = len(text.split())
-                self.config.add_history(text, app=app_name)
                 self.config.add_stat(words, len(audio) / SAMPLE_RATE)
                 _on_main(self._refresh_stats)
                 _on_main(self.history_window.refresh)
@@ -1398,7 +1401,25 @@ class LocalFlowApp(rumps.App):
                 _log("transcription vide, rien à coller")
         except Exception as exc:
             _log("erreur pipeline:\n" + traceback.format_exc())
-            _notify("Erreur", str(exc))
+            if isinstance(text, str) and text:   # transcrit mais pas collé : le texte n'est pas perdu
+                try:
+                    copy_text(text)
+                except Exception:
+                    pass
+                _notify("Dictée copiée", "Le collage a échoué : ⌘V pour la coller.")
+            else:
+                path = self._keep_failed(audio)
+                _log(f"dictée non transcrite, audio gardé : {path}")
+                if path:
+                    if isinstance(exc, voxtral.MissingKey):
+                        _notify("Clé Voxtral manquante", "Ajoute-la : cette dictée arrivera dans l'Historique.")
+                        _on_main(self._ask_key)
+                    else:
+                        _notify("Dictée non transcrite", "Je réessaie dans 1 min : elle arrivera dans l'Historique.")
+                    threading.Thread(target=self._retry_failed, args=(path, audio, app_name),
+                                     daemon=True, name="retry-perdue").start()
+                else:
+                    _notify("Dictée non transcrite", str(exc))
         finally:
             try:
                 import mlx.core as mx
@@ -1662,9 +1683,8 @@ class LocalFlowApp(rumps.App):
         return f
 
     def _meeting_transcribe(self, audio, prompt, language=""):
-        # Réunions : toujours en local. Rien ne coince côté quotas (tours ≤ 30 s), mais ce
-        # sont les voix des autres participants, et le README promet « sans cloud ».
-        return self._local_asr().transcribe(audio, prompt=prompt, language=language)
+        # Réunions : Voxtral, comme la dictée (plus de modèle local à télécharger).
+        return self.engine.transcribe(audio, prompt=prompt, language=language)
 
     def _meeting_log_status(self):
         if not sysaudio.macos_ok():

@@ -1,12 +1,12 @@
-"""Transcription Voxtral (API Mistral) en premier, Qwen3-ASR local en repli.
+"""Transcription Voxtral (API Mistral), seul moteur de dictée.
 
-Pourquoi : Qwen3-ASR occupe ~1,6 Go. Sur un Mac de 16 Go bien chargé, macOS le
-pousse dans le swap ; mesuré en octobre 2026, 785 « keep-warm lent » (jusqu'à
-102 s) et des dictées collées 15 à 92 s après le relâchement. Voxtral répond en
-~0,5 s sans rien garder en mémoire. Qwen n'est chargé qu'au premier repli.
+Pas de repli local : Qwen3-ASR occupait ~1,6 Go et faisait swapper le Mac (octobre 2026 :
+785 « keep-warm lent », dictées collées 15 à 92 s après le relâchement). Voxtral répond
+en ~0,5 s sans rien garder en mémoire.
 
-Le repli est silencieux : erreur réseau, délai dépassé, 429, clé refusée ou
-résultat vide → la même dictée part dans Qwen local. Aucune dictée n'est perdue.
+Un 429, un 5xx, une panne réseau ou un résultat vide sur une vraie dictée sont redemandés
+(RETRY_PAUSES_S, dans la limite de RETRY_BUDGET_S). Si Voxtral ne répond toujours pas,
+l'exception remonte : l'appli garde l'audio (perdues/) au lieu de le jeter.
 
 L'audio part depuis la mémoire, en WAV 16 bits construit à la volée : pas de
 fichier temporaire, pas de ffmpeg (absent du PATH sous launchd).
@@ -28,14 +28,23 @@ import numpy as np
 URL = "https://api.mistral.ai/v1/audio/transcriptions"
 MODEL = "voxtral-mini-latest"
 KEYCHAIN_SERVICE = "localflow-mistral"
+MODELS_URL = "https://api.mistral.ai/v1/models"   # GET gratuit : sert à vérifier une clé
 SAMPLE_RATE = 16000
 TIMEOUT_S = 6.0            # dictée courte ; on ajoute du temps selon la longueur de l'audio
 TIMEOUT_PER_AUDIO_S = 0.15  # envoi (~32 Ko/s d'audio) + décodage côté serveur
 TIMEOUT_MAX_S = 60.0
-COOLDOWN_S = 60.0          # après une panne réseau ou un 429 : local direct pendant 1 min
+RETRY_PAUSES_S = (1.5, 4.0, 8.0, 15.0)   # pauses avant chaque nouvel essai
+RETRY_BUDGET_S = 45.0      # on n'attend pas plus longtemps que ça avant d'abandonner (audio gardé)
+RETRY_AFTER_MAX_S = 20.0   # plafond de l'attente demandée par l'API (en-tête Retry-After)
+LATER_PAUSES_S = (60.0, 300.0, 900.0)   # dictée perdue : nouvel essai 1, 5 puis 15 min plus tard
+EMPTY_MIN_S = 5.0          # sous cette durée, un résultat vide est un silence ; au-dessus, un échec
 BIAS_MAX = 100             # termes de vocabulaire envoyés (context_bias)
 
 _key = None
+
+
+class MissingKey(RuntimeError):
+    """Pas de clé Mistral : redemander ne sert à rien, il faut la saisir (menu « Clé Voxtral… »)."""
 
 
 def api_key():
@@ -50,6 +59,34 @@ def api_key():
             _key = ""
         _key = _key or os.environ.get("MISTRAL_API_KEY", "").strip()
     return _key
+
+
+def looks_like_key(text):
+    """Une clé Mistral : une trentaine de lettres et chiffres, sans espace."""
+    return bool(re.fullmatch(r"[A-Za-z0-9]{20,80}", (text or "").strip()))
+
+
+def check_key(key, timeout=8.0):
+    """True si Mistral accepte la clé, False si elle est refusée, None si on n'a pas pu vérifier (réseau)."""
+    req = urllib.request.Request(MODELS_URL, headers={"Authorization": f"Bearer {key.strip()}"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout):
+            return True
+    except urllib.error.HTTPError as exc:
+        return False if exc.code in (401, 403) else None
+    except Exception:
+        return None
+
+
+def save_key(key):
+    """Range la clé dans le trousseau macOS (jamais dans un fichier) et l'utilise tout de suite."""
+    global _key
+    key = key.strip()
+    out = subprocess.run(["/usr/bin/security", "add-generic-password", "-U", "-a", "localflow",
+                          "-s", KEYCHAIN_SERVICE, "-w", key], capture_output=True, text=True, timeout=10)
+    if out.returncode != 0:
+        raise RuntimeError("trousseau : " + out.stderr.strip()[:120])
+    _key = key
 
 
 def wav_bytes(audio):
@@ -93,7 +130,7 @@ def transcribe_api(audio, prompt="", language="", key=None, timeout=None):
     du français, et ne déforme pas l'anglais."""
     key = key or api_key()
     if not key:
-        raise RuntimeError("clé Mistral absente du trousseau")
+        raise MissingKey("clé Mistral absente du trousseau")
     seconds = len(audio) / SAMPLE_RATE
     if timeout is None:
         timeout = min(TIMEOUT_MAX_S, TIMEOUT_S + TIMEOUT_PER_AUDIO_S * seconds)
@@ -110,54 +147,81 @@ def transcribe_api(audio, prompt="", language="", key=None, timeout=None):
         return (json.load(r).get("text") or "").strip()
 
 
+def _detail(exc):
+    """HTTP 429 (Retry-After: 2) {"message": ...} : de quoi comprendre un refus au prochain passage."""
+    try:
+        body = exc.read(300).decode("utf-8", "replace").replace("\n", " ")
+    except Exception:
+        body = ""
+    return f"HTTP {exc.code} (Retry-After: {exc.headers.get('Retry-After')}) {body}".strip()
+
+
 class Engine:
-    """Même interface que transcribe.Transcriber (transcribe, name, last_retry).
+    """Même interface que transcribe.Transcriber (transcribe, name, last_retry)."""
 
-    `local` : fonction qui rend le Transcriber Qwen, chargé à la demande.
-    `use_api` faux : tout passe en local (réglage « Moteur : local »)."""
+    use_api = True
+    name = "voxtral"
+    last_retry = ""
 
-    def __init__(self, local, log, use_api=True):
-        self._local = local
+    def __init__(self, log):
         self._log = log
-        self.use_api = use_api
-        self.name = "voxtral"
-        self.last_retry = ""
-        self._cooldown_until = 0.0
-
-    def _api_text(self, audio, prompt, language):
-        """Texte Voxtral, ou None s'il faut passer en local (raison journalisée)."""
-        if not self.use_api or time.time() < self._cooldown_until:
-            return None
-        from .transcribe import _is_hallucination, _recites_context
-
-        t0 = time.time()
-        try:
-            text = transcribe_api(audio, prompt, language)
-        except urllib.error.HTTPError as exc:
-            if exc.code == 429 or exc.code >= 500:
-                self._cooldown_until = time.time() + COOLDOWN_S
-            self._log(f"voxtral : HTTP {exc.code} → repli local")
-            return None
-        except Exception as exc:   # réseau coupé, DNS, délai dépassé, clé absente
-            self._cooldown_until = time.time() + COOLDOWN_S
-            self._log(f"voxtral : {type(exc).__name__} après {time.time() - t0:.1f}s → repli local")
-            return None
-        if len(text.split()) <= 4 and _is_hallucination(text):
-            text = ""
-        if text and _recites_context(text, " ".join(bias_terms(prompt))):
-            text = ""
-        if not text:
-            self._log("voxtral : résultat vide → repli local")
-            return None
-        return text
 
     def transcribe(self, audio, prompt="", language=""):
-        text = self._api_text(audio, prompt, language)
-        if text is not None:
-            self.name, self.last_retry = "voxtral", ""
-            return text
-        local = self._local()
-        text = local.transcribe(audio, prompt=prompt, language=language)
-        self.name = local.name + (" (repli)" if self.use_api else "")
-        self.last_retry = local.last_retry
-        return text
+        """Texte Voxtral ; lève RuntimeError si l'API n'a pas répondu dans RETRY_BUDGET_S."""
+        from .transcribe import _is_hallucination, _recites_context
+
+        seconds = len(audio) / SAMPLE_RATE
+        debut = time.time()
+        raison = ""
+        for n in range(len(RETRY_PAUSES_S) + 1):
+            pause = 0.0
+            if n:
+                pause = RETRY_PAUSES_S[n - 1]
+                if n > 1 and time.time() - debut + pause > RETRY_BUDGET_S:
+                    break
+                time.sleep(pause)
+            t0 = time.time()
+            try:
+                text = transcribe_api(audio, prompt, language)
+            except urllib.error.HTTPError as exc:
+                raison = _detail(exc)
+                self._log(f"voxtral : {raison}")
+                if exc.code != 429 and exc.code < 500:
+                    break   # clé refusée, requête invalide : redemander ne change rien
+                try:
+                    retry_after = min(float(exc.headers.get("Retry-After")), RETRY_AFTER_MAX_S)
+                except (TypeError, ValueError):
+                    retry_after = 0.0
+                suivante = RETRY_PAUSES_S[n] if n < len(RETRY_PAUSES_S) else 0.0
+                if retry_after > suivante:   # l'API demande d'attendre plus que notre pause
+                    time.sleep(retry_after - suivante)
+                continue
+            except MissingKey:
+                raise
+            except Exception as exc:   # réseau coupé, DNS, délai dépassé
+                raison = f"{type(exc).__name__} après {time.time() - t0:.1f}s"
+                self._log(f"voxtral : {raison}")
+                continue
+            if len(text.split()) <= 4 and _is_hallucination(text):
+                text = ""
+            if text and _recites_context(text, " ".join(bias_terms(prompt))):
+                text = ""
+            if text or seconds < EMPTY_MIN_S:
+                if n:
+                    self._log(f"voxtral : réponse obtenue au {n + 1}e essai")
+                return text
+            raison = "résultat vide"
+            self._log(f"voxtral : résultat vide pour {seconds:.0f}s d'audio")
+        raise RuntimeError(f"Voxtral n'a pas répondu ({raison})")
+
+
+def retry_later(engine, audio, prompt=""):
+    """Dictée que Voxtral n'a pas pu transcrire : on la redemande plus tard (réseau revenu,
+    quota reposé). Texte, ou None si Voxtral ne répond toujours pas (l'audio reste gardé)."""
+    for pause in LATER_PAUSES_S:
+        time.sleep(pause)
+        try:
+            return engine.transcribe(audio, prompt=prompt)
+        except Exception:
+            continue
+    return None

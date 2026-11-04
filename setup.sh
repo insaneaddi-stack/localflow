@@ -1,11 +1,12 @@
 #!/bin/bash
 # Installation complète de LocalFlow sur un Mac Apple Silicon (même vierge).
-#   ./setup.sh            installation standard (Qwen3-ASR + nettoyage IA)
-#   ./setup.sh --minimal  sans Qwen3-1.7B (nettoyage IA, résumés) : ~1,6 Go au lieu de ~2,6 Go
+#   ./setup.sh            installation standard : Python, dépendances, application (aucun modèle à télécharger,
+#                         la transcription passe par Voxtral ; le nettoyage IA et les résumés téléchargent
+#                         leur modèle la première fois qu'on s'en sert)
 set -euo pipefail
 cd "$(dirname "$0")"
-MINIMAL=0; ONLY=""
-for a in "$@"; do case "$a" in --minimal) MINIMAL=1;; --only-*) ONLY="${a#--only-}";; esac; done
+ONLY=""
+for a in "$@"; do case "$a" in --only-*) ONLY="${a#--only-}";; esac; done   # --minimal : ancien réglage, ignoré
 want() { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
 
 if [ "$(uname -s)" != "Darwin" ] || [ "$(uname -m)" != "arm64" ]; then
@@ -60,36 +61,6 @@ if want python; then
     .venv/bin/python -m pip install --upgrade pip -q
     .venv/bin/python -m pip install -r requirements.txt -q
     echo "$REQ_SHA" > "$STAMP"
-  fi
-fi
-model_cached() {  # model_cached <repo> : vrai si les poids sont déjà dans le cache Hugging Face
-  local d="$HOME/.cache/huggingface/hub/models--${1//\//--}"
-  [ -d "$d/snapshots" ] && find -L "$d/snapshots" -name "*.safetensors" -size +1M 2>/dev/null | grep -q . && [ -z "$(find "$d" -name '*.incomplete' 2>/dev/null)" ]
-}
-if want asr; then
-  if model_cached mlx-community/Qwen3-ASR-1.7B-4bit; then echo "==> Modèle Qwen3-ASR : déjà présent [SKIP]"
-  else
-    echo "==> Modèle Qwen3-ASR 1.7B 4-bit (~1,6 Go, une seule fois)…"
-    # Deux pièges du Hub, tous les deux vus en vrai sur ce poste :
-    #  - HF_HUB_DISABLE_XET : le backend Xet reste bloqué à 0 octet en non-authentifié ;
-    #  - huggingface_hub 1.x nomme son fichier temporaire avec un UUID par tentative
-    #    (file_download.py), donc un téléchargement coupé NE reprend PAS, il repart de zéro.
-    # D'où la boucle : sur connexion lente, chaque tentative doit pouvoir aller au bout.
-    ok=0
-    for try in 1 2 3 4 5; do
-      if HF_HUB_DISABLE_XET=1 .venv/bin/python -c "from huggingface_hub import snapshot_download; snapshot_download('mlx-community/Qwen3-ASR-1.7B-4bit')" >/dev/null; then ok=1; break; fi
-      echo "    tentative $try interrompue, on recommence…"
-      find "$HOME/.cache/huggingface/hub/models--mlx-community--Qwen3-ASR-1.7B-4bit" -name '*.incomplete' -delete 2>/dev/null || true
-      sleep 5
-    done
-    [ "$ok" = 1 ] || { echo "❌ Téléchargement du modèle vocal impossible (réseau)." >&2; exit 1; }
-  fi
-fi
-if want qwen && [ "$MINIMAL" = 0 ]; then
-  if model_cached mlx-community/Qwen3-1.7B-4bit; then echo "==> Modèle Qwen : déjà présent [SKIP]"
-  else
-    echo "==> Modèle Qwen3-1.7B 4-bit pour le nettoyage IA (~1 Go)…"
-    .venv/bin/python -c "from mlx_lm import load; load('mlx-community/Qwen3-1.7B-4bit')" >/dev/null
   fi
 fi
 if want app; then

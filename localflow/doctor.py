@@ -4,6 +4,7 @@
     LocalFlow.app/Contents/MacOS/LocalFlow -m localflow.doctor accessibility   → 0 si OK
     LocalFlow.app/Contents/MacOS/LocalFlow -m localflow.doctor microphone      → 0 si OK
     LocalFlow.app/Contents/MacOS/LocalFlow -m localflow.doctor sysaudio        → 0 si le helper son système marche
+    LocalFlow.app/Contents/MacOS/LocalFlow -m localflow.doctor voxtral         → 0 si la clé Voxtral est dans le trousseau
 """
 
 import sys
@@ -38,9 +39,16 @@ def sysaudio_ok() -> bool:
     except Exception:
         return False
 
+def voxtral_ok() -> bool:
+    try:
+        from . import voxtral
+        return bool(voxtral.api_key())
+    except Exception:
+        return False
+
 def main():
     what = sys.argv[1] if len(sys.argv) > 1 else ""
-    ok = {"accessibility": accessibility_ok, "microphone": microphone_ok, "sysaudio": sysaudio_ok}.get(what, lambda: False)()
+    ok = {"accessibility": accessibility_ok, "microphone": microphone_ok, "sysaudio": sysaudio_ok, "voxtral": voxtral_ok}.get(what, lambda: False)()
     sys.exit(0 if ok else 1)
 
 if __name__ == "__main__":

@@ -66,12 +66,12 @@ STEPS = [
     {   # 4 — réunions
         "title": "Réunions",
         "lines": ["Quand un appel démarre (Zoom, Meet, Teams…), AUR'IAFLOW propose de l'enregistrer :",
-                  "micro + son de l'appel, transcript en direct, compte rendu en Markdown. Tout reste sur ton Mac."],
+                  "micro + son de l'appel, transcript en direct, compte rendu en Markdown."],
         "hint": "Aussi dans le panneau (tuile Réunion) et le menu de la barre", "wait": "key", "arrow": True,
     },
     {   # 5 — fin
         "title": "C'est tout.",
-        "lines": ["Dictionnaire, moteur et réglages : le A dans la barre des menus.",
+        "lines": ["Dictionnaire, clé Voxtral et réglages : le A dans la barre des menus.",
                   "Dis « corrige X en Y » pour lui apprendre un mot. Bonne dictée."],
         "hint": "Se ferme tout seul", "wait": "timer:6", "arrow": False,
     },
