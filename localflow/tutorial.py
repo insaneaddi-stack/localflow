@@ -2,11 +2,15 @@
 
 Une carte du système (crème, filet, ombre chaude) posée au-dessus de la barre du
 bas, le monogramme qui présente et une flèche animée vers la barre. Les étapes
-avancent quand l'utilisateur FAIT la chose (première dictée, mains-libres, panneau),
-Esc passe une étape. Tout est transparent à la souris : rien à cliquer.
+avancent quand l'utilisateur FAIT la chose (première dictée, mains-libres, panneau)
+ou clique le bouton de la carte. Le reste de l'écran est transparent à la souris.
+
+Étape « Ta clé Voxtral » (absente si la clé est déjà là) : « Ouvrir la console » puis
+« Coller la clé » (lit le presse-papiers), ou « Plus tard ».
 """
 
 import math
+import threading
 import time
 
 import objc
@@ -31,7 +35,7 @@ from AppKit import (
     NSWindowStyleMaskNonactivatingPanel,
 )
 
-from . import theme
+from . import keydialog, theme, voxtral
 from .overlay import _BandView, _attrs, _draw_text, _text_width, _orange, _encre, MARGINS, IDLE_H
 
 CARD_W, CARD_H = 520.0, 150.0
@@ -44,6 +48,12 @@ STEPS = [
         "lines": ["Cette petite barre, en bas, c'est AUR'IAFLOW. Elle reste là,",
                   "discrète, tant que tu ne parles pas."],
         "hint": "", "wait": "key", "arrow": True,
+    },
+    {   # clé Voxtral : l'étape disparaît si la clé est déjà dans le trousseau
+        "title": "Ta clé Voxtral",
+        "lines": ["Ouvre la console Mistral, crée une clé (API Keys), copie-la (⌘C).",
+                  "Reviens ici et clique « Coller la clé »."],
+        "hint": "", "wait": "key_set", "arrow": False, "needs_key": True,
     },
     {   # 1 — première dictée (attend un vrai collage)
         "title": "Ta première dictée",
@@ -91,7 +101,7 @@ class _TutorialView(NSView):
             return
         b = self.bounds()
         k = t.alpha
-        step = STEPS[t.index]
+        step = t.steps[t.index]
         # --- carte
         cx = b.size.width / 2.0
         card = NSMakeRect(cx - CARD_W / 2, t.card_y, CARD_W, CARD_H)
@@ -126,8 +136,11 @@ class _TutorialView(NSView):
         for line in step["lines"]:
             _draw_text(line, NSMakeRect(tx, y, CARD_W - 96, 17), _attrs(12.5, 0.85 * k))
             y -= 19
+        if t.status and step["wait"] == "key_set":   # retour de l'étape clé : vérification, erreur…
+            _draw_text(t.status, NSMakeRect(tx, y, CARD_W - 96, 17),
+                       _attrs(12.5, 0.95 * k, weight=600, color=_orange(0.95 * k)))
         # progression (points) + aide
-        n = len(STEPS)
+        n = len(t.steps)
         px = card.origin.x + 22
         for i in range(n):
             (_orange(0.95 * k) if i == t.index else _encre(0.18 * k)).setFill()
@@ -150,7 +163,8 @@ class _TutorialView(NSView):
                     head.moveToPoint_((x0 - 8, y_tip + 18)); head.lineToPoint_((x0, y_tip + 8)); head.lineToPoint_((x0 + 8, y_tip + 18))
                     head.stroke()
 
-BTN_W, BTN_H = 112.0, 30.0
+BTN_W, BTN_H = 136.0, 30.0
+LATER_W = 84.0
 
 class _ButtonView(NSView):
     def initWithFrame_(self, frame):
@@ -160,6 +174,8 @@ class _ButtonView(NSView):
         self.tut = None
         self.hover = False
         self.label = "Suivant"
+        self.action = "main"      # "main" ou "later" (« Plus tard », discret)
+        self.ghost = False
         self._tracking = None
         return self
 
@@ -181,15 +197,19 @@ class _ButtonView(NSView):
 
     def mouseDown_(self, event):
         if self.tut is not None:
-            self.tut.event("key")
+            self.tut.button(self.action)
 
     def drawRect_(self, dirty):
         b = self.bounds()
         k = self.tut.alpha if self.tut else 1.0
         path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
             NSMakeRect(0.5, 0.5, b.size.width - 1, b.size.height - 1), theme.RAYON_BOUTON, theme.RAYON_BOUTON)
-        theme.ns(theme.O_PETIT if self.hover else theme.O_BOUTON, k).setFill(); path.fill()
-        a = _attrs(12, k, weight=600, color=theme.ns(theme.BLANC, 0.96 * k))
+        if self.ghost:
+            theme.ns(theme.TRAIT, k).setStroke(); path.setLineWidth_(theme.FILET); path.stroke()
+            a = _attrs(12, (0.9 if self.hover else 0.65) * k, weight=500)
+        else:
+            theme.ns(theme.O_PETIT if self.hover else theme.O_BOUTON, k).setFill(); path.fill()
+            a = _attrs(12, k, weight=600, color=theme.ns(theme.BLANC, 0.96 * k))
         w = _text_width(self.label, a)
         _draw_text(self.label, NSMakeRect(b.size.width / 2 - w / 2, b.size.height / 2 - 8, w + 2, 16), a)
 
@@ -208,6 +228,11 @@ class Tutorial:
         self._t0 = time.time()
         self.panel = None
         self.view = None
+        self.steps = list(STEPS)
+        self.status = ""            # ligne de retour de l'étape clé
+        self.key_action = None      # posé par l'app : key_action(done) lit le presse-papiers hors fil principal
+        self._key_ready = False     # la console a été ouverte (ou une clé est déjà copiée) : le bouton colle
+        self._busy = False
 
     # ---- fenêtre plein écran transparente, traversante ----
     def _build(self):
@@ -231,24 +256,30 @@ class Tutorial:
         # bouton cliquable : sa propre petite fenêtre (le reste de l'écran reste traversant)
         bx = vf.origin.x + vf.size.width / 2.0 + CARD_W / 2 - 20 - BTN_W
         by = vf.origin.y + self.card_y + 10
-        self.btn_panel = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
-            NSMakeRect(bx, by, BTN_W, BTN_H), NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel, NSBackingStoreBuffered, False)
-        self.btn_panel.setOpaque_(False)
-        self.btn_panel.setBackgroundColor_(NSColor.clearColor())
-        self.btn_panel.setLevel_(NSStatusWindowLevel + 2)
-        self.btn_panel.setHasShadow_(False)
-        self.btn_panel.setCollectionBehavior_(NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorStationary)
-        self.btn = _ButtonView.alloc().initWithFrame_(NSMakeRect(0, 0, BTN_W, BTN_H))
-        self.btn.tut = self
-        self.btn_panel.setContentView_(self.btn)
+        self.btn_panel, self.btn = self._button(bx, by, BTN_W, "Suivant", "main", False)
+        self.later_panel, self.later = self._button(bx - 8 - LATER_W, by, LATER_W, "Plus tard", "later", True)
+
+    def _button(self, x, y, w, label, action, ghost):
+        panel = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
+            NSMakeRect(x, y, w, BTN_H), NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel, NSBackingStoreBuffered, False)
+        panel.setOpaque_(False)
+        panel.setBackgroundColor_(NSColor.clearColor())
+        panel.setLevel_(NSStatusWindowLevel + 2)
+        panel.setHasShadow_(False)
+        panel.setCollectionBehavior_(NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorStationary)
+        view = _ButtonView.alloc().initWithFrame_(NSMakeRect(0, 0, w, BTN_H))
+        view.tut, view.label, view.action, view.ghost = self, label, action, ghost
+        panel.setContentView_(view)
+        return panel, view
 
     def show(self):
         if self.panel is None:
             self._build()
         self.active = True
+        self.steps = self._visible_steps()
         self.index = 0
         self.alpha = 0.0
-        self._step_t0 = time.time()
+        self._enter_step()
         self.panel.orderFrontRegardless()
         self.btn_panel.orderFrontRegardless()
         if self._timer is None:
@@ -261,6 +292,7 @@ class Tutorial:
         if self.panel is not None:
             self.panel.orderOut_(None)
             self.btn_panel.orderOut_(None)
+            self.later_panel.orderOut_(None)
 
     def finish(self):
         self.config.data["onboarded"] = True
@@ -270,17 +302,60 @@ class Tutorial:
             self.on_done()
 
     def _advance(self):
-        if self.index + 1 >= len(STEPS):
+        if self.index + 1 >= len(self.steps):
             self.finish(); return
         self.index += 1
         self.alpha = 0.0
+        self._enter_step()
+
+    @staticmethod
+    def _visible_steps():
+        """Toutes les étapes, sauf celle de la clé quand elle est déjà dans le trousseau."""
+        return [s for s in STEPS if not (s.get("needs_key") and voxtral.api_key())]
+
+    def _enter_step(self):
         self._step_t0 = time.time()
+        self.status = ""
+        self._busy = False
+        key_step = self.steps[self.index]["wait"] == "key_set"
+        if key_step:   # une clé déjà copiée : le bouton colle tout de suite
+            self._key_ready = keydialog.clipboard_has_key()
+        if self.panel is not None:
+            if key_step:
+                self.later_panel.orderFrontRegardless()
+            else:
+                self.later_panel.orderOut_(None)
+
+    def button(self, action="main"):
+        """Clic sur un bouton de la carte."""
+        if not self.active:
+            return
+        if self.steps[self.index]["wait"] != "key_set":
+            self.event("key"); return
+        if action == "later":
+            self._advance(); return
+        if self._busy:
+            return
+        if not self._key_ready:
+            keydialog.open_console()
+            self._key_ready = True
+            self.status = "Copie la clé (⌘C), puis clique « Coller la clé »."
+            return
+        self._busy, self.status = True, "Vérification…"
+        self.key_action(self._key_done)
+
+    def _key_done(self, result):
+        self._busy = False
+        if result in ("ok", "unverified"):
+            self._advance(); return
+        self.status = {"not_a_key": "Rien à coller : copie d'abord la clé (⌘C).",
+                       "refused": "Mistral refuse cette clé : vérifie ta copie."}.get(result, "Échec : réessaie.")
 
     def event(self, name):
-        """'key' (Entrée/Esc), 'dictated', 'handsfree', 'panel'."""
+        """'key' (bouton Suivant), 'dictated', 'handsfree', 'panel'."""
         if not self.active:
             return False
-        step = STEPS[self.index]
+        step = self.steps[self.index]
         if name == "key" or step["wait"] == name:
             self._advance()
             return True
@@ -290,12 +365,18 @@ class Tutorial:
         now = time.time()
         self.phase = now - self._t0
         self.alpha = min(1.0, self.alpha + 1.0 / (FPS * 0.28))
-        step = STEPS[self.index]
-        label = "Terminer" if self.index == len(STEPS) - 1 else ("Passer" if step["wait"] in ("dictated",) else "Suivant")
+        step = self.steps[self.index]
+        wait = step["wait"]
+        if wait == "key_set":
+            label = "Coller la clé" if self._key_ready else "Ouvrir la console"
+            if voxtral.api_key():   # la clé est arrivée par ailleurs (menu « Clé Voxtral… »)
+                self._advance(); return
+        else:
+            label = "Terminer" if self.index == len(self.steps) - 1 else ("Passer" if wait == "dictated" else "Suivant")
         if self.btn.label != label:
             self.btn.label = label
         self.btn.setNeedsDisplay_(True)
-        wait = STEPS[self.index]["wait"]
+        self.later.setNeedsDisplay_(True)
         if wait.startswith("timer:") and now - self._step_t0 > float(wait.split(":")[1]):
             self._advance()
         if self.view is not None:

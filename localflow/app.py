@@ -386,6 +386,7 @@ class LocalFlowApp(rumps.App):
         self.history_window = HistoryWindow.alloc().initWithConfig_notify_(self.config, _notify)
         self.perms = PermissionsWindow.alloc().initWithIcon_(ICON_PATH)
         self.tutorial = Tutorial(self.config)
+        self.tutorial.key_action = self._tutorial_key_action
         self.overlay = Overlay(self._overlay_level, self._panel_data, self._panel_action)
         self.overlay.meeting_info = self._meeting_info
 
@@ -594,9 +595,9 @@ class LocalFlowApp(rumps.App):
             after = self.tutorial.show if first else None
             if voxtral.api_key():
                 self.item_status.title = "Prêt — maintenir fn, ou fn+espace"
-            else:   # première installation : la clé se demande juste après les autorisations
+            else:   # le tutoriel a une étape pour la clé ; déjà installé sans clé : la fenêtre de saisie
                 self.item_status.title = "Clé Voxtral manquante — menu « Clé Voxtral… »"
-                after = lambda then=after: self._ask_key(then=then)
+                after = after or self._ask_key
             if self.perms.missing():
                 self.perms.show(on_done=after)
             elif after:
@@ -672,8 +673,8 @@ class LocalFlowApp(rumps.App):
 
         def run():
             try:
-                if keydialog.ask_key(_notify) and self.item_status.title.startswith("Clé Voxtral"):
-                    _on_main(lambda: setattr(self.item_status, "title", "Prêt — maintenir fn, ou fn+espace"))
+                if keydialog.ask_key(_notify):
+                    _on_main(self._key_saved)
             except Exception:
                 _log("saisie de la clé Voxtral:\n" + traceback.format_exc())
             finally:
@@ -682,6 +683,25 @@ class LocalFlowApp(rumps.App):
                 _on_main(then)
 
         threading.Thread(target=run, daemon=True, name="cle-voxtral").start()
+
+    def _key_saved(self):
+        if self.item_status.title.startswith("Clé Voxtral"):
+            self.item_status.title = "Prêt — maintenir fn, ou fn+espace"
+
+    def _tutorial_key_action(self, done):
+        """Étape « Ta clé Voxtral » du tutoriel : colle la clé du presse-papiers (réseau : hors fil principal)."""
+        def run():
+            try:
+                res = keydialog.paste_key()
+            except Exception:
+                _log("clé Voxtral (tutoriel):\n" + traceback.format_exc())
+                res = "error"
+            if res in ("ok", "unverified"):
+                _notify("Clé Voxtral enregistrée", "Tu peux dicter.")
+                _on_main(self._key_saved)
+            _on_main(lambda: done(res))
+
+        threading.Thread(target=run, daemon=True, name="cle-tutoriel").start()
 
     def _local_asr(self):
         """Qwen3-ASR, chargé à la première demande (repli de Voxtral, réunions, YouTube)."""

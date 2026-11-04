@@ -226,9 +226,9 @@ if wait_until wait 300 20 "Pas de fenêtre ? Réglages → Confidentialité → 
   ok "Micro accordé"
 else ko "Micro non accordé — active-le dans Réglages → Micro, LocalFlow marchera aussitôt."; fi
 blank
-say "$B Clé Voxtral$N  $(c $MUT)— LocalFlow t'ouvre une fenêtre : copie ta clé Mistral (⌘C), clique « Coller la clé »$N"
-say "   $(c $MUT)Pas encore de clé ? Clique « Ouvrir la console » → API Keys → Create new key (1 min, centimes par heure de dictée).$N"
-if wait_until wait 600 30 "J'attends ta clé… (fenêtre « Clé Voxtral », ou plus tard : menu de la barre → Clé Voxtral…)" doctor voxtral; then
+say "$B Clé Voxtral$N  $(c $MUT)— une carte s'affiche en bas de l'écran : suis-la$N"
+say "   $(c $MUT)« Ouvrir la console » → API Keys → Create new key, copie la clé (⌘C), puis « Coller la clé » (1 min).$N"
+if wait_until wait 600 30 "J'attends ta clé… (carte « Ta clé Voxtral » en bas de l'écran, ou plus tard : menu de la barre → Clé Voxtral…)" doctor voxtral; then
   ok "Clé Voxtral enregistrée"
 else ko "Pas de clé pour l'instant — ajoute-la plus tard : menu de la barre → Clé Voxtral…"; fi
 blank

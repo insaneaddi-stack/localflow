@@ -21,10 +21,12 @@ curl -fsSL https://raw.githubusercontent.com/insaneaddi-stack/localflow/main/ins
 
 La fenêtre se ferme toute seule quand les deux sont vertes.
 
-**3. Ta clé Voxtral.** Une fenêtre *Clé Voxtral* s'ouvre :
+**3. Ta clé Voxtral.** Le tutoriel s'affiche dans l'app (une carte en bas de l'écran) et commence par la clé :
 1. Clique *Ouvrir la console* → *API Keys* → *Create new key*.
 2. Copie la clé (⌘C).
-3. Reviens à la fenêtre, clique **Coller la clé**. Elle est vérifiée puis rangée dans le trousseau du Mac (jamais dans un fichier).
+3. Reviens à la carte, clique **Coller la clé**. Elle est vérifiée puis rangée dans le trousseau du Mac (jamais dans un fichier).
+
+Le tutoriel continue ensuite tout seul : première dictée, mains-libres, panneau, réunions. Pour le revoir : menu de la barre → *Revoir le tutoriel*.
 
 Plus tard, pour la changer : icône de la barre des menus → **Clé Voxtral…**
 

@@ -66,5 +66,21 @@ class Saisie(unittest.TestCase):
         self.assertEqual(vus[0], vus[1])   # même consigne après un détour par la console
 
 
+class CollerLaCle(unittest.TestCase):
+    def test_resultats(self):
+        gardees = []
+        def coller(presse, valide):
+            return keydialog.paste_key(lambda: presse, lambda k: valide, gardees.append)
+        self.assertEqual(coller(CLE, True), "ok")
+        self.assertEqual(coller(CLE, None), "unverified")
+        self.assertEqual(coller("bonjour tout le monde", True), "not_a_key")
+        self.assertEqual(coller(CLE, False), "refused")
+        self.assertEqual(gardees, [CLE, CLE])   # seules les clés acceptées (ou invérifiables) sont rangées
+
+    def test_cle_deja_copiee_detectee(self):
+        self.assertTrue(keydialog.clipboard_has_key(lambda: CLE))
+        self.assertFalse(keydialog.clipboard_has_key(lambda: "autre chose"))
+
+
 if __name__ == "__main__":
     unittest.main()

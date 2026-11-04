@@ -35,11 +35,28 @@ def _clipboard():
     return subprocess.run(["pbpaste"], capture_output=True, text=True).stdout
 
 
-def _open_console():
+def open_console():
     subprocess.run(["open", CONSOLE_URL])
 
 
-def ask_key(notify, dialog=_dialog, clipboard=_clipboard, open_console=_open_console,
+def clipboard_has_key(clipboard=_clipboard):
+    return voxtral.looks_like_key(clipboard())
+
+
+def paste_key(clipboard=_clipboard, check=voxtral.check_key, save=voxtral.save_key):
+    """Prend la clé dans le presse-papiers et la range.
+    "ok" | "unverified" (enregistrée, mais Mistral injoignable) | "not_a_key" | "refused"."""
+    key = clipboard().strip()
+    if not voxtral.looks_like_key(key):
+        return "not_a_key"
+    valid = check(key)
+    if valid is False:
+        return "refused"
+    save(key)
+    return "ok" if valid else "unverified"
+
+
+def ask_key(notify, dialog=_dialog, clipboard=_clipboard, open_console=open_console,
             check=voxtral.check_key, save=voxtral.save_key):
     """Boucle de saisie. True si une clé a été enregistrée, False si l'utilisateur remet à plus tard."""
     message = CONSIGNE
@@ -50,15 +67,13 @@ def ask_key(notify, dialog=_dialog, clipboard=_clipboard, open_console=_open_con
             continue
         if rep != COLLER:
             return False
-        key = clipboard().strip()
-        if not voxtral.looks_like_key(key):
+        res = paste_key(clipboard, check, save)
+        if res == "not_a_key":
             message = f"Le presse-papiers ne contient pas de clé Mistral.\nCopie la clé (⌘C), puis clique « {COLLER} »."
             continue
-        valid = check(key)
-        if valid is False:
+        if res == "refused":
             message = f"Mistral refuse cette clé. Vérifie que tu as copié la bonne (⌘C), puis clique « {COLLER} »."
             continue
-        save(key)
         notify("Clé Voxtral enregistrée",
-               "Tu peux dicter." if valid else "Je n'ai pas pu la vérifier (pas de réseau ?), elle est enregistrée.")
+               "Tu peux dicter." if res == "ok" else "Je n'ai pas pu la vérifier (pas de réseau ?), elle est enregistrée.")
         return True
