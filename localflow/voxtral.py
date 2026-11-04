@@ -41,6 +41,8 @@ EMPTY_MIN_S = 5.0          # sous cette durée, un résultat vide est un silence
 BIAS_MAX = 100             # termes de vocabulaire envoyés (context_bias)
 
 _key = None
+_key_looked = 0.0
+KEY_RECHECK_S = 2.0   # sans clé, on relit le trousseau au plus toutes les 2 s : l'installateur ou le menu peut l'avoir ajoutée
 
 
 class MissingKey(RuntimeError):
@@ -49,15 +51,17 @@ class MissingKey(RuntimeError):
 
 def api_key():
     """Clé Mistral : trousseau macOS (service localflow-mistral), sinon $MISTRAL_API_KEY."""
-    global _key
-    if _key is None:
-        try:
-            out = subprocess.run(["/usr/bin/security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
-                                 capture_output=True, text=True, timeout=5)
-            _key = out.stdout.strip() if out.returncode == 0 else ""
-        except Exception:
-            _key = ""
-        _key = _key or os.environ.get("MISTRAL_API_KEY", "").strip()
+    global _key, _key_looked
+    if _key or (_key is not None and time.time() - _key_looked < KEY_RECHECK_S):
+        return _key
+    try:
+        out = subprocess.run(["/usr/bin/security", "find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"],
+                             capture_output=True, text=True, timeout=5)
+        _key = out.stdout.strip() if out.returncode == 0 else ""
+    except Exception:
+        _key = ""
+    _key = _key or os.environ.get("MISTRAL_API_KEY", "").strip()
+    _key_looked = time.time()
     return _key
 
 

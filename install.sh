@@ -121,6 +121,45 @@ ask()  {  # ask "question" → réponse dans $ANSWER (pas de sous-shell, pas d'�
   printf '%s' "$ANSWER"; tput civis; LINE=$((LINE+1))
 }
 
+ask_secret() {  # ask_secret "question" → $ANSWER ; la clé ne s'affiche jamais, seulement ••••1234
+  newline; at $LINE 3; printf '\033[K   %s' "$1"; tput cnorm
+  ANSWER=""; read -rs ANSWER < /dev/tty || ANSWER=""
+  ANSWER="$(printf '%s' "$ANSWER" | tr -d '[:space:]\047"')"
+  [ -n "$ANSWER" ] && printf '••••%s' "${ANSWER: -4}"; tput civis; LINE=$((LINE+1))
+}
+ask_plain() {  # ask_plain "question" <secondes> → $ANSWER, texte visible (la dictée s'y tape)
+  newline; at $LINE 3; printf '\033[K   %s' "$1"; tput cnorm
+  ANSWER=""; read -r -t "$2" ANSWER < /dev/tty || ANSWER=""
+  tput civis; LINE=$((LINE+1))
+}
+key_ok() { printf '%s' "$1" | grep -Eq '^[A-Za-z0-9]{20,80}$'; }
+key_check() {  # 200 = valide, 401/403 = refusée, autre (réseau…) = on ne sait pas
+  curl -s -o /dev/null -m 8 -w '%{http_code}' -H @<(printf 'Authorization: Bearer %s' "$1") https://api.mistral.ai/v1/models 2>/dev/null
+}
+voxtral_key_step() {  # tutoriel + saisie de la clé, dans la console ; 0 si une clé est enregistrée
+  local try clip hint code
+  say "   $B 1 $N Va sur $B console.mistral.ai $N → $B API Keys $N → $B Create new key $N"
+  say "   $B 2 $N Copie la clé  $(c $MUT)(⌘C)$N"
+  say "   $B 3 $N Reviens ici et colle-la  $(c $MUT)(⌘V : rien ne s'affiche, c'est normal), puis Entrée$N"
+  for try in 1 2 3 4 5; do
+    clip="$(pbpaste 2>/dev/null | tr -d '[:space:]')"
+    if key_ok "$clip"; then hint="Une clé est dans ton presse-papiers (••••${clip: -4}) : Entrée pour l'utiliser, ou colle-en une autre : "
+    else clip=""; hint="Colle ta clé  $(c $MUT)(Entrée = j'ouvre la page des clés, p = plus tard)$N : "; fi
+    ask_secret "$hint"
+    if [ -z "$ANSWER" ] && [ -n "$clip" ]; then ANSWER="$clip"
+    elif [ -z "$ANSWER" ]; then open "https://console.mistral.ai/api-keys" 2>/dev/null; say "   $(c $MUT)Page ouverte. Crée la clé, copie-la, puis reviens ici.$N"; continue
+    elif [ "$ANSWER" = "p" ]; then return 1; fi
+    key_ok "$ANSWER" || { ko "Ça ne ressemble pas à une clé Mistral (lettres et chiffres, sans espace). Réessaie."; continue; }
+    code="$(key_check "$ANSWER")"
+    case "$code" in 401|403) ko "Mistral refuse cette clé : vérifie que tu l'as copiée en entier."; continue;; esac
+    security add-generic-password -U -a localflow -s localflow-mistral -w "$ANSWER" >/dev/null 2>&1 || { ko "Impossible de la ranger dans le trousseau du Mac."; return 1; }
+    if [ "$code" = 200 ]; then ok "Clé Voxtral vérifiée et rangée dans le trousseau du Mac"
+    else ok "Clé rangée dans le trousseau  $(c $MUT)(pas pu la vérifier : pas de réseau ?)$N"; fi
+    return 0
+  done
+  return 1
+}
+
 run() {  # run "message" <mood> cmd…  — exécute en fond, anime orbe + barre
   local msg="$1" mood="$2"; shift 2
   newline; local row=$LINE; LINE=$((LINE+1)); local t=0 w=24
@@ -226,11 +265,20 @@ if wait_until wait 300 20 "Pas de fenêtre ? Réglages → Confidentialité → 
   ok "Micro accordé"
 else ko "Micro non accordé — active-le dans Réglages → Micro, LocalFlow marchera aussitôt."; fi
 blank
-say "$B Clé Voxtral$N  $(c $MUT)— une carte s'affiche en bas de l'écran : suis-la$N"
-say "   $(c $MUT)« Ouvrir la console » → API Keys → Create new key, copie la clé (⌘C), puis « Coller la clé » (1 min).$N"
-if wait_until wait 600 30 "J'attends ta clé… (carte « Ta clé Voxtral » en bas de l'écran, ou plus tard : menu de la barre → Clé Voxtral…)" doctor voxtral; then
-  ok "Clé Voxtral enregistrée"
-else ko "Pas de clé pour l'instant — ajoute-la plus tard : menu de la barre → Clé Voxtral…"; fi
+say "$B Clé Voxtral$N  $(c $MUT)— c'est elle qui transcrit ta voix (1 minute)$N"
+if [ "$DEMO" = 1 ]; then ok "Clé Voxtral vérifiée et rangée dans le trousseau du Mac"
+elif doctor voxtral; then ok "Clé Voxtral déjà enregistrée"
+elif ! voxtral_key_step; then
+  ko "Pas de clé pour l'instant. Plus tard : icône de la barre des menus → Clé Voxtral…"
+fi
+if [ "$DEMO" != 1 ] && doctor voxtral; then
+  blank
+  say "$B Essaie maintenant$N  $(c $MUT)— maintiens $N${B}fn$N$(c $MUT), dis « bonjour, ça marche », relâche, puis Entrée$N"
+  say "   $(c $MUT)(Entrée sans rien dire pour passer)$N"
+  ask_plain "> " 180
+  if [ -n "$ANSWER" ]; then ok "Ça marche : « $ANSWER »"; orb_frame 0 happy; sleep 0.6
+  else say "   $(c $MUT)Pas de souci, tu essaieras dans n'importe quelle app.$N"; fi
+fi
 blank
 say "$B Réunions$N  $(c $MUT)— le son de l'appel (Zoom, Meet…) demande une 3e autorisation,$N"
 say "   $(c $MUT)« Enregistrement audio système », proposée par macOS à ta première réunion.$N"

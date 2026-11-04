@@ -21,14 +21,14 @@ curl -fsSL https://raw.githubusercontent.com/insaneaddi-stack/localflow/main/ins
 
 La fenêtre se ferme toute seule quand les deux sont vertes.
 
-**3. Ta clé Voxtral.** Le tutoriel s'affiche dans l'app (une carte en bas de l'écran) et commence par la clé :
-1. Clique *Ouvrir la console* → *API Keys* → *Create new key*.
-2. Copie la clé (⌘C).
-3. Reviens à la carte, clique **Coller la clé**. Elle est vérifiée puis rangée dans le trousseau du Mac (jamais dans un fichier).
+**3. Ta clé Voxtral, directement dans la console.** L'installateur te guide pas à pas :
+1. Va sur console.mistral.ai → *API Keys* → *Create new key* (Entrée dans la console ouvre la page pour toi).
+2. Copie la clé (⌘C). Si elle est déjà copiée, l'installateur la repère : Entrée suffit.
+3. Colle-la dans la console (rien ne s'affiche pendant que tu colles, c'est normal), Entrée. Elle est vérifiée auprès de Mistral puis rangée dans le trousseau du Mac (jamais dans un fichier).
 
-Le tutoriel continue ensuite tout seul : première dictée, mains-libres, panneau, réunions. Pour le revoir : menu de la barre → *Revoir le tutoriel*.
+Ensuite, l'installateur te fait **essayer tout de suite** : maintiens `fn`, dis « bonjour, ça marche », relâche. Le texte s'écrit dans la console.
 
-Plus tard, pour la changer : icône de la barre des menus → **Clé Voxtral…**
+Tu peux passer cette étape (`p`) : une carte du tutoriel dans l'app, ou le menu de la barre → **Clé Voxtral…**, te la redemandera. Le tutoriel de l'app continue ensuite : première dictée, mains-libres, panneau, réunions (menu → *Revoir le tutoriel*).
 
 **4. Essaie.** Clique dans un champ de texte, maintiens `fn`, parle, relâche.
 
