@@ -66,8 +66,8 @@ def api_key():
 
 
 def looks_like_key(text):
-    """Une clé Mistral : une trentaine de lettres et chiffres, sans espace."""
-    return bool(re.fullmatch(r"[A-Za-z0-9]{20,80}", (text or "").strip()))
+    """Une clé Mistral : lettres, chiffres, « _ » ou « - » (ex. mstrl_…), sans espace."""
+    return bool(re.fullmatch(r"[A-Za-z0-9_-]{20,120}", (text or "").strip()))
 
 
 def check_key(key, timeout=8.0):

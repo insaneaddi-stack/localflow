@@ -689,7 +689,7 @@ class LocalFlowApp(rumps.App):
             self.item_status.title = "Prêt — maintenir fn, ou fn+espace"
 
     def _tutorial_key_action(self, done):
-        """Étape « Ta clé Voxtral » du tutoriel : colle la clé du presse-papiers (réseau : hors fil principal)."""
+        """Étape « Ta clé Voxtral » du tutoriel : ouvre le champ où coller la clé (réseau : hors fil principal)."""
         def run():
             try:
                 res = keydialog.paste_key()

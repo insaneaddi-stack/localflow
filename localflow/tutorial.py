@@ -6,7 +6,7 @@ avancent quand l'utilisateur FAIT la chose (première dictée, mains-libres, pan
 ou clique le bouton de la carte. Le reste de l'écran est transparent à la souris.
 
 Étape « Ta clé Voxtral » (absente si la clé est déjà là) : « Ouvrir la console » puis
-« Coller la clé » (lit le presse-papiers), ou « Plus tard ».
+« Coller la clé » (ouvre un champ où coller la clé), ou « Plus tard ».
 """
 
 import math
@@ -51,8 +51,8 @@ STEPS = [
     },
     {   # clé Voxtral : l'étape disparaît si la clé est déjà dans le trousseau
         "title": "Ta clé Voxtral",
-        "lines": ["Ouvre la console Mistral, crée une clé (API Keys), copie-la (⌘C).",
-                  "Reviens ici et clique « Coller la clé »."],
+        "lines": ["Ouvre la console Mistral, crée une clé (API Keys), copie-la.",
+                  "Reviens ici, clique « Coller la clé » et colle-la dans le champ (⌘V)."],
         "hint": "", "wait": "key_set", "arrow": False, "needs_key": True,
     },
     {   # 1 — première dictée (attend un vrai collage)
@@ -230,7 +230,7 @@ class Tutorial:
         self.view = None
         self.steps = list(STEPS)
         self.status = ""            # ligne de retour de l'étape clé
-        self.key_action = None      # posé par l'app : key_action(done) lit le presse-papiers hors fil principal
+        self.key_action = None      # posé par l'app : key_action(done) ouvre le champ de saisie hors fil principal
         self._key_ready = False     # la console a été ouverte (ou une clé est déjà copiée) : le bouton colle
         self._busy = False
 
@@ -339,7 +339,7 @@ class Tutorial:
         if not self._key_ready:
             keydialog.open_console()
             self._key_ready = True
-            self.status = "Copie la clé (⌘C), puis clique « Coller la clé »."
+            self.status = "Copie la clé, puis clique « Coller la clé »."
             return
         self._busy, self.status = True, "Vérification…"
         self.key_action(self._key_done)
@@ -348,7 +348,7 @@ class Tutorial:
         self._busy = False
         if result in ("ok", "unverified"):
             self._advance(); return
-        self.status = {"not_a_key": "Rien à coller : copie d'abord la clé (⌘C).",
+        self.status = {"not_a_key": "Ce n'est pas une clé : recolle-la dans le champ (⌘V).",
                        "refused": "Mistral refuse cette clé : vérifie ta copie."}.get(result, "Échec : réessaie.")
 
     def event(self, name):

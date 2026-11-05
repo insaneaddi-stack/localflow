@@ -54,7 +54,7 @@ class EtapeCle(unittest.TestCase):
         t = tuto(presse_papiers_a_une_cle=True, resultat="not_a_key")
         t.button()
         self.assertEqual(t.index, 1)
-        self.assertIn("copie", t.status)
+        self.assertIn("recolle", t.status)
 
     def test_cle_refusee_on_reste(self):
         t = tuto(presse_papiers_a_une_cle=True, resultat="refused")
