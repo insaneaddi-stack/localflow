@@ -65,6 +65,22 @@ def default_input_id():
 _BLUETOOTH = {int.from_bytes(b"blue", "big"), int.from_bytes(b"blea", "big")}
 _BUILTIN = int.from_bytes(b"bltn", "big")
 
+def in_use_elsewhere(dev_id):
+    """Vrai si une autre appli tient déjà ce micro (WhatsApp, Meet… en appel). Les AirPods sont
+    alors déjà en mode « appel » : les ouvrir aussi ne coûte rien, et c'est là que l'on parle."""
+    try:
+        import ctypes
+        default_input_id()   # charge CoreAudio
+        class Addr(ctypes.Structure):
+            _fields_ = [("sel", ctypes.c_uint32), ("scope", ctypes.c_uint32), ("elem", ctypes.c_uint32)]
+        val, size = ctypes.c_uint32(0), ctypes.c_uint32(4)
+        a = Addr(int.from_bytes(b"gone", "big"), int.from_bytes(b"glob", "big"), 0)
+        if not dev_id or _ca.AudioObjectGetPropertyData(dev_id, ctypes.byref(a), 0, None, ctypes.byref(size), ctypes.byref(val)) != 0:
+            return False
+        return bool(val.value)
+    except Exception:
+        return False
+
 def pick_input(devices, default_name, lid_closed=False):
     """devices = [(nom, transport)]. Nom du micro intégré si le micro par défaut est Bluetooth,
     sinon None (= on garde le micro par défaut). Capot fermé : macOS coupe le micro intégré,
@@ -83,6 +99,8 @@ def preferred_input():
         name = str(default.localizedName())
         if dict(devices).get(name) not in _BLUETOOTH:
             return None          # cas courant : pas besoin d'interroger le capot
+        if in_use_elsewhere(default_input_id()):
+            return None          # en appel sur le casque : on écoute le casque, pas le Mac au loin
         return pick_input(devices, name, lid_closed=lid_closed())
     except Exception:
         return None
