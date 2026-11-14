@@ -22,11 +22,11 @@ BLOCK = 256            # 16 ms : premier son ~70 ms après l'ouverture
 RING_S = 1.5
 PREROLL_S = 0.35
 TARGET_RMS = 0.06
-MAX_GAIN = 25.0
+MAX_GAIN = 100.0   # +40 dB : en appel la voix arrive très bas, +28 dB ne suffisait plus
 NOISE_FLOOR = 0.002
 ATTACK = 0.6
 RELEASE = 0.08
-VAD_MIN_ABS = 0.0012   # ≈ -58 dBFS dans la bande voix : en dessous, jamais de la voix (AVANT le gain)
+VAD_MIN_ABS = 0.0004   # ≈ -68 dBFS : en appel WhatsApp, macOS livre la voix ~15 dB plus bas (mesuré)
 VAD_FLOOR_RATIO = 2.5  # voix = au moins 2,5× le bruit ambiant (dans la bande voix)
 _VAD_BINS = slice(4, 57)  # FFT 256 pts @16 kHz : 62,5 Hz/bin → 250–3500 Hz
 
