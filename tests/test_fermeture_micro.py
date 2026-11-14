@@ -19,7 +19,7 @@ class FluxFige:
     def __init__(self):
         self.libere = threading.Event()
 
-    def stop(self):
+    def abort(self):
         self.libere.wait(5)
 
     def close(self):
@@ -29,7 +29,7 @@ class FluxFige:
 class FluxNormal:
     fermé = False
 
-    def stop(self):
+    def abort(self):
         pass
 
     def close(self):

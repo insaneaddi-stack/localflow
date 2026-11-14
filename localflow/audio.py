@@ -246,7 +246,7 @@ def close_input_stream(stream, wait_s=CLOSE_WAIT_S):
     done = threading.Event()
 
     def work():
-        for op in (stream.stop, stream.close):
+        for op in (stream.abort, stream.close):   # abort : coupe sans attendre que les tampons se vident (c'est stop qui se figeait)
             try:
                 op()
             except Exception:
