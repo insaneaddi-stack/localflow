@@ -64,6 +64,7 @@ BUSY_FILE = os.path.expanduser("~/Library/Caches/LocalFlow/busy")
 FAILED_DIR = os.path.expanduser("~/Library/Caches/LocalFlow/perdues")
 DEBUG_WAV = os.path.expanduser("~/Library/Caches/LocalFlow/last.wav")  # dernière dictée, pour diagnostiquer
 MIN_AUDIO_S = 0.35       # ignore les enregistrements plus courts
+LONG_DICTATION_S = 2.0   # au-delà, jamais jetée sur le seul avis du détecteur de voix
 MIN_VOICED_S = 0.12      # seuil bas : le détecteur ne compte que les pics (silence pur = 0,00 s)
 MAX_RECORD_S = 600       # arrêt auto d'une dictée qui n'en finit pas (mains-libres ou fn coincé)
 FN_LOST_GRACE_S = 1.5    # délai avant de conclure que le relâchement de fn s'est perdu
@@ -1242,6 +1243,12 @@ class LocalFlowApp(rumps.App):
         voiced = self.recorder.voiced_s
         if voiced < MIN_VOICED_S and pre is not None:
             pre.stop()
+        # Dictée longue (≥ 2 s) que le détecteur juge « sans voix » : en appel WhatsApp, le traitement
+        # de voix de l'appel baisse le micro et le détecteur rate la parole. On transcrit quand même.
+        if voiced < MIN_VOICED_S and len(audio) >= LONG_DICTATION_S * SAMPLE_RATE \
+                and np.any(audio) and self.recorder.noise_floor >= 1e-6:
+            _log(f"audio {len(audio)/SAMPLE_RATE:.2f}s, voix non détectée ({voiced:.2f}s) → transcrit quand même")
+            voiced = len(audio) / SAMPLE_RATE
         if voiced < MIN_VOICED_S:
             # Zéros exacts, ou presque (< -120 dBFS : un vrai micro a toujours un souffle) :
             # mesuré, 13 dictées perdues à « bruit -174 dBFS » passaient sous ce test.
@@ -1419,6 +1426,8 @@ class LocalFlowApp(rumps.App):
                         if dt > max(SLOW_FLOOR_S, SLOW_FACTOR * attendu) else ""))
             else:
                 _log("transcription vide, rien à coller")
+                if len(audio) >= LONG_DICTATION_S * SAMPLE_RATE:
+                    self._keep_failed(audio)   # rien ne se perd : l'audio reste dans perdues/
         except Exception as exc:
             _log("erreur pipeline:\n" + traceback.format_exc())
             if isinstance(text, str) and text:   # transcrit mais pas collé : le texte n'est pas perdu
