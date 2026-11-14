@@ -22,11 +22,12 @@ BLOCK = 256            # 16 ms : premier son ~70 ms après l'ouverture
 RING_S = 1.5
 PREROLL_S = 0.35
 TARGET_RMS = 0.06
-MAX_GAIN = 100.0   # +40 dB : en appel la voix arrive très bas, +28 dB ne suffisait plus
-NOISE_FLOOR = 0.0004   # ≈ -68 dBFS : en appel la voix arrive sous -54 dB, le gain ne montait jamais
+MAX_GAIN = 25.0
+NOISE_FLOOR = 0.002
 ATTACK = 0.6
+CALL_BOOST_DB = 15.0   # en appel (WhatsApp…), macOS livre la voix ~15 dB plus bas aux autres applis : on les rajoute à l'entrée
 RELEASE = 0.08
-VAD_MIN_ABS = 0.0004   # ≈ -68 dBFS : en appel WhatsApp, macOS livre la voix ~15 dB plus bas (mesuré)
+VAD_MIN_ABS = 0.0012   # ≈ -58 dBFS dans la bande voix : en dessous, jamais de la voix (AVANT le gain)
 VAD_FLOOR_RATIO = 2.5  # voix = au moins 2,5× le bruit ambiant (dans la bande voix)
 _VAD_BINS = slice(4, 57)  # FFT 256 pts @16 kHz : 62,5 Hz/bin → 250–3500 Hz
 
@@ -79,6 +80,16 @@ def _prop(obj, sel, ctype, count=1):
         return None
     return list(buf)[: size.value // ctypes.sizeof(ctype)]
 
+_SYSTEM_LISTENERS = {"corespeechd"}   # Siri / « Dis Siri » écoute en permanence : ce n'est pas un appel
+
+def _proc_name(pid):
+    try:
+        import subprocess
+        return os.path.basename(subprocess.run(["/bin/ps", "-p", str(pid), "-o", "comm="],
+                                               capture_output=True, text=True, timeout=1).stdout.strip())
+    except Exception:
+        return ""
+
 def in_use_elsewhere(dev_id):
     """Vrai si une AUTRE appli que LocalFlow écoute ce micro (WhatsApp, Meet… en appel).
     Les AirPods sont alors déjà en mode « appel » : les écouter aussi ne coûte rien.
@@ -97,7 +108,10 @@ def in_use_elsewhere(dev_id):
             if not pid or pid[0] == me:
                 continue
             running = _prop(p, b"piri", ctypes.c_uint32)
-            if running and running[0] and dev_id in (_prop(p, b"pdv#", ctypes.c_uint32, 64) or []):
+            if not (running and running[0]) or _proc_name(pid[0]) in _SYSTEM_LISTENERS:
+                continue
+            devs = _prop(p, b"pdv#", ctypes.c_uint32, 64) or []
+            if not devs or dev_id in devs:   # WhatsApp ne déclare pas son périphérique : on le compte
                 return True
         return False
     except Exception:
@@ -259,6 +273,8 @@ class Recorder:
         self._recording = False
         self._level = 0.0
         self._gain = 1.0
+        self._call_boost = 1.0
+        self.in_call = False
         self._last_callback = 0.0
         self._hp_x = 0.0
         self._hp_y = 0.0
@@ -290,6 +306,9 @@ class Recorder:
                 reset_portaudio()   # le périphérique a changé depuis la dernière ouverture : liste à rafraîchir
             self._opened_id = self._device_id
             device = preferred_input()
+            in_call = in_use_elsewhere(self._device_id)
+            self._call_boost = 10 ** (CALL_BOOST_DB / 20) if in_call else 1.0
+            self.in_call = in_call
             try:
                 self._device_name = device or sd.query_devices(kind="input")["name"]
             except Exception:
@@ -353,7 +372,7 @@ class Recorder:
 
     def _callback(self, indata, frames, time_info, status):
         self._last_callback = time.time()
-        mono = indata[:, 0].astype(np.float32)
+        mono = indata[:, 0].astype(np.float32) * self._call_boost
         if mono.size and not np.any(mono):
             if not self._silent_since:
                 self._silent_since = self._last_callback

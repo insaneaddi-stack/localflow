@@ -1083,6 +1083,8 @@ class LocalFlowApp(rumps.App):
         live = self.config.live_enabled and not self.engine.use_api and self.transcriber is not None
         try:
             self.recorder.start(live=live)
+            if self.recorder.in_call:
+                _log("en appel : +15 dB à l'entrée du micro")
             if self.recorder.last_reopen:
                 _log(f"micro rouvert avant la dictée : {self.recorder.last_reopen}")
         except Exception as exc:
