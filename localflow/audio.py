@@ -14,6 +14,7 @@ import threading
 import time
 
 import numpy as np
+import os
 import sounddevice as sd
 
 SAMPLE_RATE = 16000
@@ -65,19 +66,40 @@ def default_input_id():
 _BLUETOOTH = {int.from_bytes(b"blue", "big"), int.from_bytes(b"blea", "big")}
 _BUILTIN = int.from_bytes(b"bltn", "big")
 
+def _prop(obj, sel, ctype, count=1):
+    """Lit une propriété CoreAudio (portée globale). Liste de `count` éléments max, ou None."""
+    import ctypes
+    default_input_id()   # charge CoreAudio
+    class Addr(ctypes.Structure):
+        _fields_ = [("sel", ctypes.c_uint32), ("scope", ctypes.c_uint32), ("elem", ctypes.c_uint32)]
+    buf = (ctype * count)()
+    size = ctypes.c_uint32(ctypes.sizeof(buf))
+    a = Addr(int.from_bytes(sel, "big"), int.from_bytes(b"glob", "big"), 0)
+    if _ca.AudioObjectGetPropertyData(obj, ctypes.byref(a), 0, None, ctypes.byref(size), buf) != 0:
+        return None
+    return list(buf)[: size.value // ctypes.sizeof(ctype)]
+
 def in_use_elsewhere(dev_id):
-    """Vrai si une autre appli tient déjà ce micro (WhatsApp, Meet… en appel). Les AirPods sont
-    alors déjà en mode « appel » : les ouvrir aussi ne coûte rien, et c'est là que l'on parle."""
+    """Vrai si une AUTRE appli que LocalFlow écoute ce micro (WhatsApp, Meet… en appel).
+    Les AirPods sont alors déjà en mode « appel » : les écouter aussi ne coûte rien.
+    macOS 14+ : liste des processus audio ; sinon repli sur « utilisé quelque part »."""
     try:
         import ctypes
-        default_input_id()   # charge CoreAudio
-        class Addr(ctypes.Structure):
-            _fields_ = [("sel", ctypes.c_uint32), ("scope", ctypes.c_uint32), ("elem", ctypes.c_uint32)]
-        val, size = ctypes.c_uint32(0), ctypes.c_uint32(4)
-        a = Addr(int.from_bytes(b"gone", "big"), int.from_bytes(b"glob", "big"), 0)
-        if not dev_id or _ca.AudioObjectGetPropertyData(dev_id, ctypes.byref(a), 0, None, ctypes.byref(size), ctypes.byref(val)) != 0:
+        if not dev_id:
             return False
-        return bool(val.value)
+        procs = _prop(1, b"prs#", ctypes.c_uint32, 256)
+        if procs is None:
+            r = _prop(dev_id, b"gone", ctypes.c_uint32)
+            return bool(r and r[0])
+        me = os.getpid()
+        for p in procs:
+            pid = _prop(p, b"ppid", ctypes.c_int32)
+            if not pid or pid[0] == me:
+                continue
+            running = _prop(p, b"piri", ctypes.c_uint32)
+            if running and running[0] and dev_id in (_prop(p, b"pdv#", ctypes.c_uint32, 64) or []):
+                return True
+        return False
     except Exception:
         return False
 
