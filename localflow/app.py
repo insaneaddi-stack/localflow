@@ -99,6 +99,28 @@ except OSError:
 LOG_MAX_BYTES = 5 * 1024 * 1024   # au-delà : le log passe en .1 (une seule sauvegarde)
 _log_lock = threading.Lock()
 
+_saved_input_volume = None
+
+def _mic_boost(on):
+    """Dictée : volume du micro système à 100 (WhatsApp/Meet le baissent pendant un appel, la voix
+    arrivait à −59 dB). Fin de dictée : on remet la valeur d'avant. En tâche de fond, jamais bloquant."""
+    def run():
+        global _saved_input_volume
+        try:
+            osa = lambda cmd: subprocess.run(["/usr/bin/osascript", "-e", cmd], capture_output=True, text=True, timeout=3).stdout.strip()
+            if on:
+                cur = int(osa("input volume of (get volume settings)") or 100)
+                if cur < 100:
+                    _saved_input_volume = cur
+                    osa("set volume input volume 100")
+                    _log(f"micro : volume système {cur} → 100 le temps de la dictée")
+            elif _saved_input_volume is not None:
+                v, _saved_input_volume = _saved_input_volume, None
+                osa(f"set volume input volume {v}")
+        except Exception:
+            pass
+    threading.Thread(target=run, daemon=True).start()
+
 def _log(msg):
     global _log_file
     try:
@@ -1081,6 +1103,7 @@ class LocalFlowApp(rumps.App):
         self._ctx_app = frontmost_app()
         # Le direct décode avec la session Qwen : seulement quand Qwen est le moteur.
         live = self.config.live_enabled and not self.engine.use_api and self.transcriber is not None
+        _mic_boost(True)   # WhatsApp en appel baisse le volume du micro du Mac : on le remonte le temps de la dictée
         try:
             self.recorder.start(live=live)
             if self.recorder.last_reopen:
@@ -1207,6 +1230,7 @@ class LocalFlowApp(rumps.App):
         if self._live is not None:
             self._live.abort = True
         self.recorder.cancel()
+        _mic_boost(False)
         self.overlay.hide()
         self._set_icon(self._idle_state())
 
@@ -1228,6 +1252,7 @@ class LocalFlowApp(rumps.App):
             # Esc est tombé pendant les TAIL_S : le minuteur arrive après la bataille.
             return
         audio = self.recorder.stop()
+        _mic_boost(False)
         pre, self._pre = self._pre, None
         if pre is not None and (self._mode != "dictation" or audio is None
                                 or not (pre.segments or pre.working)):
