@@ -1448,7 +1448,10 @@ class LocalFlowApp(rumps.App):
                     type_text(re.sub(r"\s*\n+(?:- )?", " ", text))
                     how = "tapé"
                 else:
-                    paste_text(text)
+                    def _miss():
+                        _log("collage non vu dans le champ : dictée laissée dans le presse-papiers")
+                        _notify("Dictée pas collée ?", "Elle est dans le presse-papiers : ⌘V pour la coller.")
+                    paste_text(text, on_miss=_miss)
                     how = "collé"
                 if how != "copié (app changée)":
                     self.learner.remember_paste(text, bundle)

@@ -81,9 +81,11 @@ def type_text(text: str):
             Quartz.CGEventPost(Quartz.kCGHIDEventTap, e)
         time.sleep(0.004)
 
-def paste_text(text: str, restore_clipboard: bool = True):
+def paste_text(text: str, restore_clipboard: bool = True, on_miss=None):
     """Colle `text` dans l'app active, puis restaure l'ancien presse-papiers
-    (tous formats) si l'utilisateur n'a rien copié entre-temps."""
+    (tous formats) si l'utilisateur n'a rien copié entre-temps.
+    Collage raté (champ lisible mais sans le texte) : la dictée RESTE dans le
+    presse-papiers et on_miss() prévient l'utilisateur."""
     previous = _snapshot_clipboard() if restore_clipboard else []
     _set_clipboard(text)
     pb = NSPasteboard.generalPasteboard()
@@ -91,17 +93,23 @@ def paste_text(text: str, restore_clipboard: bool = True):
     time.sleep(0.05)  # laisse le pasteboard se propager
     _press_cmd_v()
 
-    if previous:
+    def _restore():
+        from .learning import read_focused_text
+        if wait_until_pasted(text, read=read_focused_text):
+            ok = True
+        else:
+            ok = not read_focused_text()   # champ illisible : on ne peut pas savoir, on fait confiance
+        if not ok:
+            if on_miss:
+                on_miss()
+            return                         # on garde la dictée dans le presse-papiers
+        if previous and pb.changeCount() == our_change:  # l'utilisateur n'a pas copié autre chose
+            try:
+                _restore_clipboard(previous)
+            except Exception:
+                pass
 
-        def _restore():
-            wait_until_pasted(text)
-            if pb.changeCount() == our_change:  # l'utilisateur n'a pas copié autre chose
-                try:
-                    _restore_clipboard(previous)
-                except Exception:
-                    pass
-
-        threading.Thread(target=_restore, daemon=True).start()
+    threading.Thread(target=_restore, daemon=True).start()
 
 def pasted_in(text: str, field) -> bool:
     """Vrai si le champ relu contient la fin du texte collé (blancs ignorés : le champ
