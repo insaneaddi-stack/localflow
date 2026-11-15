@@ -22,6 +22,8 @@ import numpy as np
 import rumps
 from AppKit import NSApp, NSImage, NSOperationQueue
 
+from . import audio as audio_mod
+from .transcribe import _looks_broken
 from .audio import SAMPLE_RATE, Recorder, audio_stuck, hung_close_s
 from .predecode import PreDecoder
 from . import theme
@@ -1025,6 +1027,8 @@ class LocalFlowApp(rumps.App):
                     if time.time() - self.recorder.last_used > MIC_LINGER_S or not self.recorder.healthy():
                         self.recorder.close(wait=False)  # mode économe, sans jamais bloquer le thread principal
                         _log("micro refermé (inactivité)")
+                while audio_mod.slow_closes:
+                    _log(f"fermeture lente du micro : {audio_mod.slow_closes.pop(0)} s (appel : {'oui' if self.recorder.in_call else 'non'})")
             if not self._listener_ok:
                 self._start_listener()
             else:
@@ -1370,8 +1374,15 @@ class LocalFlowApp(rumps.App):
                 _on_main(self.overlay.end_progress)
 
             seconds = len(audio) / SAMPLE_RATE
-            if text and len(text.split()) > seconds * 4.5 + 4:   # > 4,5 mots/s : impossible
-                _log(f"rejeté : {len(text.split())} mots pour {seconds:.1f}s d'audio (hallucination probable)")
+            n_mots = len(text.split()) if text else 0
+            # Un Français pressé dicte 5 à 6 mots/s : les 13 rejets d'août-nov. (4,7 à 6 mots/s)
+            # étaient pour la plupart de vraies dictées. On ne jette plus que l'impossible
+            # (> 7 mots/s) ou un débit élevé qui tourne en boucle.
+            if text and (n_mots > seconds * 7 + 4 or
+                         (n_mots > seconds * 4.5 + 4 and "boucle" in _looks_broken(text, seconds))):
+                _log(f"rejeté : {n_mots} mots pour {seconds:.1f}s d'audio (hallucination probable)")
+                self._keep_failed(audio)
+                _notify("Rien compris", "Redis ta phrase : l'audio est gardé dans « perdues ».")
                 text = ""
             text = self.learner.apply(self.dictionary.apply(text))
             learn = parse_learn_command(text)

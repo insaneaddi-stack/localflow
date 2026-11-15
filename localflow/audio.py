@@ -229,6 +229,8 @@ def open_input_stream(**kwargs):
 _hung_closes = {}
 CLOSE_WAIT_S = 2.0
 
+slow_closes = []
+
 def close_input_stream(stream, wait_s=CLOSE_WAIT_S):
     """Ferme un flux sans jamais bloquer l'appelant plus de wait_s.
 
@@ -251,7 +253,9 @@ def close_input_stream(stream, wait_s=CLOSE_WAIT_S):
                 op()
             except Exception:
                 pass
-        _hung_closes.pop(key, None)
+        dt = time.time() - _hung_closes.pop(key, time.time())
+        if dt > 0.5:
+            slow_closes.append(round(dt, 1))   # lu et journalisé par l'app : reste-t-il des fermetures lentes ?
         done.set()
 
     threading.Thread(target=work, daemon=True, name="audio-close").start()
@@ -269,6 +273,7 @@ class Recorder:
         self._device_name = None
         self._ring = np.zeros(int(RING_S * SAMPLE_RATE), dtype=np.float32)
         self._ring_pos = 0
+        self._filled = 0
         self._chunks = []
         self._recording = False
         self._level = 0.0
@@ -317,6 +322,8 @@ class Recorder:
             # flux courant a le droit d'écrire dans l'anneau.
             self._stream_gen = getattr(self, "_stream_gen", 0) + 1
             gen = self._stream_gen
+            self._filled = 0            # l'anneau garde la fin de la dictée précédente : on l'ignore
+            self._floor_hist = []       # bruit de fond remesuré pour ce flux
 
             def callback(indata, frames, time_info, status):
                 if gen != self._stream_gen:
@@ -413,6 +420,7 @@ class Recorder:
             self._ring[self._ring_pos:] = boosted[:k]
             self._ring[: n - k] = boosted[k:]
         self._ring_pos = end % len(self._ring)
+        self._filled += n
         if self._recording:
             self._chunks.append(boosted)
             self._level = min(1.0, float(np.sqrt(np.mean(boosted ** 2))) * 6.0)
@@ -421,7 +429,9 @@ class Recorder:
                 q.put(boosted)
 
     def _preroll(self):
-        n = int(PREROLL_S * SAMPLE_RATE)
+        n = min(int(PREROLL_S * SAMPLE_RATE), self._filled)   # seulement ce que CE flux a capté
+        if n <= 0:
+            return np.zeros(0, dtype=np.float32)
         start = (self._ring_pos - n) % len(self._ring)
         if start + n <= len(self._ring):
             return self._ring[start:start + n].copy()
