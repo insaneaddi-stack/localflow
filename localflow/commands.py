@@ -24,7 +24,8 @@ _RULES = [
     (r"[ \t]*[,.]?[ \t]*\bpoint d'exclamation\b[ \t]*[.,!?]?", "!"),
     (r"[ \t]*[,.]?[ \t]*\bexclamation mark\b[ \t]*[.,!?]?", "!"),
     (r"[ \t]*[,.]?[ \t]*\bpoints? de suspension\b[ \t]*[.,!?]?", "…"),
-    (r"[ \t]*[,.]?[ \t]*\bdeux[- ]points\b[ \t]*[.,!?]?", " :"),
+    # « il a marqué deux points » reste tel quel : la commande exige une pause (ponctuation) autour, ou la fin
+    (r"[ \t]*[,.][ \t]*\bdeux[- ]points\b[ \t]*[.,!?]?|[ \t]*\bdeux[- ]points\b[ \t]*(?:[.,!?]|$)", " :"),
     (r"[ \t]*[,.]?[ \t]*\bpoint[- ]virgule\b[ \t]*[.,!?]?", " ;"),
     (r"\bouvrez? (les |la )?(guillemets?|parenthèses?)\b[ \t]*[.,!?]?[ \t]*", lambda m: " « " if "guill" in m.group(2) else " ("),
     (r"[ \t]*[,.]?[ \t]*\bfermez? (les |la )?(guillemets?|parenthèses?)\b[ \t]*[.,!?]?", lambda m: " »" if "guill" in m.group(2) else ")"),
