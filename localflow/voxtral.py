@@ -191,6 +191,10 @@ class Engine:
             except urllib.error.HTTPError as exc:
                 raison = _detail(exc)
                 self._log(f"voxtral : {raison}")
+                if exc.code in (400, 422) and prompt:
+                    prompt = ""   # coup de pouce refusé : on renvoie sans, la dictée ne se perd jamais à cause de lui
+                    self._log("voxtral : vocabulaire refusé, renvoi sans")
+                    continue
                 if exc.code != 429 and exc.code < 500:
                     break   # clé refusée, requête invalide : redemander ne change rien
                 try:

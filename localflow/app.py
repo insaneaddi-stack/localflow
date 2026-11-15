@@ -24,6 +24,8 @@ from AppKit import NSApp, NSImage, NSOperationQueue
 
 from . import audio as audio_mod
 from .transcribe import _looks_broken
+from .vocab import Vocab
+from .dictionary import mot_du_francais_ou_de_l_anglais
 from .audio import SAMPLE_RATE, Recorder, audio_stuck, hung_close_s
 from .predecode import PreDecoder
 from . import theme
@@ -275,6 +277,10 @@ class LocalFlowApp(rumps.App):
         self.cleaner = Cleaner()
         self.dictionary = Dictionary()
         self.learner = Learner(self.config, _notify, _log)
+        self.vocab = Vocab(mot_du_francais_ou_de_l_anglais)
+        self._last_bias = []
+        if self.vocab.empty:   # premier lancement : on apprend de l'historique, en tâche de fond (~1,5 s)
+            threading.Thread(target=self._vocab_backfill, daemon=True, name="vocab").start()
         self.transcriber = None   # Qwen3-ASR : repli de Voxtral, direct et réunions — chargé à la demande
         self._local_lock = threading.Lock()
         self._local_used = 0.0
@@ -770,9 +776,31 @@ class LocalFlowApp(rumps.App):
         self.config.save()
 
     def _asr_prompt(self):
-        """Contexte passé à Qwen3-ASR : dictionnaire + corrections apprises."""
-        words = list(self.dictionary.words) + list(self.learner.active().values())
-        return ", ".join(dict.fromkeys(words)) + "." if words else ""
+        """Coup de pouce : dictionnaire, corrections apprises, puis le vocabulaire appris tout seul."""
+        if self.config.data.get("vocab_auto", True):
+            words = self.vocab.terms(app=(self._ctx_app or ("", ""))[1], manual=self.dictionary.words,
+                                     learned=list(self.learner.active().values()),
+                                     wrong=self.dictionary.wrong_words)
+        else:
+            words = list(dict.fromkeys(list(self.dictionary.words) + list(self.learner.active().values())))
+        self._last_bias = words
+        return ", ".join(words) + "." if words else ""
+
+    def _vocab_backfill(self):
+        import datetime as _dt
+        try:
+            n = 0
+            for e in sorted(self.config.history, key=lambda e: e.get("t", "")):
+                try:
+                    d = _dt.datetime.fromisoformat(e["t"]).timestamp() / 86400
+                except Exception:
+                    continue
+                self.vocab.observe(e.get("text", ""), e.get("app", ""), now=d)
+                n += 1
+            self.vocab.save()
+            _log(f"vocabulaire : appris sur {n} dictées, {len(self.vocab.table)} mots suivis")
+        except Exception:
+            _log("vocabulaire : rattrapage échoué\n" + traceback.format_exc())
 
     # ---------- touche fn ----------
 
@@ -1408,6 +1436,7 @@ class LocalFlowApp(rumps.App):
             elif text:
                 # Dans l'historique avant de coller : un collage qui plante ne perd plus la dictée.
                 self.config.add_history(text, app=app_name)
+                self.vocab.observe(text, app_name, self._last_bias)
                 if not same_app(bundle, frontmost_app()[0]):
                     # L'app a changé pendant la transcription (dictée lente, ou on est
                     # passé ailleurs) : coller ici irait dans la mauvaise fenêtre.

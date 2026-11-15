@@ -61,6 +61,7 @@ class Dictionary:
         self._mtime = None
         self.words = []        # mots protégés, casse d'origine
         self.replacements = [] # (regex compilé, remplacement)
+        self.wrong_words = set()
         if not os.path.exists(path):
             try:
                 with open(path, "w", encoding="utf-8") as f:
@@ -77,7 +78,7 @@ class Dictionary:
         if mtime == self._mtime:
             return
         self._mtime = mtime
-        words, repl = [], []
+        words, repl, wrong = [], [], set()
         try:
             with open(self.path, encoding="utf-8") as f:
                 for line in f:
@@ -88,6 +89,7 @@ class Dictionary:
                         bad, good = (s.strip() for s in line.split("->", 1))
                         if bad and good:
                             repl.append((re.compile(r"\b" + re.escape(bad) + r"\b", re.IGNORECASE), good))
+                            wrong.update(w.lower() for w in bad.split())
                             words.append(good)
                     else:
                         words.append(line)
@@ -95,6 +97,8 @@ class Dictionary:
             return
         self.words = list(dict.fromkeys(words))
         self.replacements = repl
+        right = {w.lower() for t in self.words for w in t.split()}
+        self.wrong_words = wrong - right   # « lookman », « vixel » : fautes connues, jamais envoyées au coup de pouce
 
     def vocab_words(self):
         """Tous les tokens du vocabulaire (pour le garde-fou LLM)."""
