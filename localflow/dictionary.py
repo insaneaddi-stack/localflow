@@ -16,8 +16,9 @@ DEFAULT_CONTENT = """# Dictionnaire AUR'IAFLOW — un mot ou un nom par ligne.
 # « mauvais -> bon » force un remplacement. Sans flèche, les mots proches sont corrigés.
 # Rechargé automatiquement à chaque dictée.
 LocalFlow
-whisper flow -> Wispr Flow
-whisperflow -> Wispr Flow
+local flow -> LocalFlow
+Claude Code
+cloud code -> Claude Code
 """
 
 _WORD_RE = re.compile(r"[A-Za-zÀ-ÿœæŒÆ0-9'’-]+")

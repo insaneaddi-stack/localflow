@@ -320,6 +320,7 @@ def _dedupe(chunks, aggressive):
 
 def _polish(text: str) -> str:
     text = re.sub(r"[ \t ]+", " ", text)
+    text = re.sub(r"(?:\.{3}|…)(?=\s+[A-ZÀ-ÖØ-Þ])", ".", text)   # « fini... Ensuite » → « fini. Ensuite »
     text = re.sub(r"\s+([,.])", r"\1", text)          # pas d'espace avant , et .
     text = re.sub(r"([,;:])\1+", r"\1", text)
     text = re.sub(r",\s*(?=[.!?;:])", "", text)

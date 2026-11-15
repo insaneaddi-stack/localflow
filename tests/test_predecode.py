@@ -46,7 +46,7 @@ class Assemblage(unittest.TestCase):
 
         class T:
             n = 0
-            def transcribe(self, a, prompt=""):
+            def transcribe(self, a, prompt="", empty_ok=False):
                 T.n += 1
                 return f"seg{T.n}"
 

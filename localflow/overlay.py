@@ -1426,9 +1426,14 @@ class Overlay:
 
     # ---- boucle d'animation ----
 
-    def _ensure_timer(self):
-        if self._timer is None:
-            self._timer = NSTimer.scheduledTimerWithTimeInterval_repeats_block_(1.0 / FPS, True, self._tick)
+    def _ensure_timer(self, slow=False):
+        """slow : bulle au repos, 15 Hz suffisent pour la respiration (4× moins de réveils)."""
+        if self._timer is not None and getattr(self, "_timer_slow", False) == slow:
+            return
+        if self._timer is not None:
+            self._timer.invalidate()
+        self._timer_slow = slow
+        self._timer = NSTimer.scheduledTimerWithTimeInterval_repeats_block_(1.0 / (15 if slow else FPS), True, self._tick)
 
     def _tick(self, timer):
         now = time.time()
@@ -1488,6 +1493,9 @@ class Overlay:
             if self._wave_tick % 3 == 0:
                 self.wave = self.wave[1:] + [self.level]
         # au repos, on redessine juste assez pour la respiration (économie CPU)
-        if self.state in ("idle", "meeting") and not animating and int(self.phase * FPS) % (4 if self.state == "idle" else 3) != 0:
+        if self.state == "idle" and not animating:
+            if not getattr(self, "_timer_slow", False):
+                self._ensure_timer(slow=True)   # l'horloge elle-même ralentit : chaque tick dessine
+        elif self.state == "meeting" and not animating and int(self.phase * FPS) % 3 != 0:
             return
         self.view.setNeedsDisplay_(True)

@@ -85,6 +85,14 @@ class PreDecoder:
         rest = audio[self.committed:]
         tail = ""
         if len(rest) > 0.3 * SR:
-            with self.lock:
-                tail = self.transcriber.transcribe(rest, prompt=self.prompt_fn())
+            try:
+                with self.lock:
+                    if self.texts:   # fin silencieuse possible : un vide ne déclenche pas 90 s de nouveaux essais
+                        tail = self.transcriber.transcribe(rest, prompt=self.prompt_fn(), empty_ok=True)
+                    else:
+                        tail = self.transcriber.transcribe(rest, prompt=self.prompt_fn())
+            except Exception:
+                if not self.texts:
+                    raise
+                tail = ""   # la fin a échoué : on garde tout ce qui est déjà transcrit
         return " ".join(t for t in self.texts + [tail] if t).strip(), len(rest) / SR

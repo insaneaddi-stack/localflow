@@ -170,8 +170,9 @@ class Engine:
     def __init__(self, log):
         self._log = log
 
-    def transcribe(self, audio, prompt="", language=""):
-        """Texte Voxtral ; lève RuntimeError si l'API n'a pas répondu dans RETRY_BUDGET_S."""
+    def transcribe(self, audio, prompt="", language="", empty_ok=False):
+        """empty_ok : un vide est accepté tout de suite (fin silencieuse d'une longue dictée déjà transcrite).
+        Texte Voxtral ; lève RuntimeError si l'API n'a pas répondu dans RETRY_BUDGET_S."""
         from .transcribe import _is_hallucination, _recites_context
 
         seconds = len(audio) / SAMPLE_RATE
@@ -210,7 +211,7 @@ class Engine:
                 text = ""
             if text and _recites_context(text, " ".join(bias_terms(prompt))):
                 text = ""
-            if text or seconds < EMPTY_MIN_S:
+            if text or seconds < EMPTY_MIN_S or empty_ok:
                 if n:
                     self._log(f"voxtral : réponse obtenue au {n + 1}e essai")
                 return text
