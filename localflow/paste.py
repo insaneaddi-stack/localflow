@@ -86,6 +86,8 @@ def paste_text(text: str, restore_clipboard: bool = True, on_miss=None):
     (tous formats) si l'utilisateur n'a rien copié entre-temps.
     Collage raté (champ lisible mais sans le texte) : la dictée RESTE dans le
     presse-papiers et on_miss() prévient l'utilisateur."""
+    from .learning import read_focused_text
+    before = read_focused_text()
     previous = _snapshot_clipboard() if restore_clipboard else []
     _set_clipboard(text)
     pb = NSPasteboard.generalPasteboard()
@@ -94,11 +96,15 @@ def paste_text(text: str, restore_clipboard: bool = True, on_miss=None):
     _press_cmd_v()
 
     def _restore():
-        from .learning import read_focused_text
-        if wait_until_pasted(text, read=read_focused_text):
-            ok = True
-        else:
-            ok = not read_focused_text()   # champ illisible : on ne peut pas savoir, on fait confiance
+        ok = wait_until_pasted(text, read=read_focused_text)
+        now = read_focused_text()
+        if not ok and before is not None and now == before:
+            # Champ lisible et INCHANGÉ : le ⌘V n'a pas pris (vu dans Gemini). On retape
+            # le texte directement ; inchangé = aucun risque de doublon.
+            type_text(text)
+            ok = wait_until_pasted(text, max_s=1.0, read=read_focused_text)
+        if not ok:
+            ok = not now                   # champ illisible ou modifié (envoyé…) : on fait confiance
         if not ok:
             if on_miss:
                 on_miss()
