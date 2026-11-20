@@ -141,6 +141,32 @@ def groq_key():
     return k or os.environ.get("GROQ_API_KEY", "").strip()
 
 
+def looks_like_groq_key(text):
+    """Une clé Groq commence par gsk_ (ex. gsk_AbC…), sans espace."""
+    return bool(re.fullmatch(r"gsk_[A-Za-z0-9]{20,120}", (text or "").strip()))
+
+
+def check_groq_key(key, timeout=8.0):
+    """True si Groq accepte la clé, False si refusée, None si on n'a pas pu vérifier (réseau)."""
+    req = urllib.request.Request("https://api.groq.com/openai/v1/models",
+                                 headers={"Authorization": f"Bearer {key.strip()}", "User-Agent": "LocalFlow/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout):
+            return True
+    except urllib.error.HTTPError as exc:
+        return False if exc.code == 401 else None
+    except Exception:
+        return None
+
+
+def save_groq_key(key):
+    """Range la clé Groq dans le trousseau macOS (jamais dans un fichier)."""
+    out = subprocess.run(["/usr/bin/security", "add-generic-password", "-U", "-a", "localflow",
+                          "-s", GROQ_KEYCHAIN_SERVICE, "-w", key.strip()], capture_output=True, text=True, timeout=10)
+    if out.returncode != 0:
+        raise RuntimeError("trousseau : " + out.stderr.strip()[:120])
+
+
 def groq_api(audio, prompt, language, key, timeout):
     """Texte Whisper chez Groq (gratuit, 2 000 dictées/jour). Le vocabulaire passe en « prompt » (Whisper)."""
     fields = [("model", GROQ_MODEL), ("temperature", "0")]

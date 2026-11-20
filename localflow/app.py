@@ -326,6 +326,7 @@ class LocalFlowApp(rumps.App):
         self.item_stats = rumps.MenuItem("Statistiques : —", callback=self._open_history)
         self.item_cleanup = self._toggle_item("Nettoyage IA", "cleanup_enabled", self._toggle_cleanup)
         self.item_key = rumps.MenuItem("Clé Voxtral…", callback=self._ask_key)
+        self.item_groq = rumps.MenuItem("Passer à Groq (gratuit)…", callback=self._ask_groq)
         self.item_tone = self._toggle_item("Ton adapté à l'app", "tone_auto")
         self.item_sounds = self._toggle_item("Sons", "sounds_enabled")
         self.item_mic = self._toggle_item("Micro toujours prêt (point orange permanent)", "mic_always_on", self._toggle_mic)
@@ -382,6 +383,7 @@ class LocalFlowApp(rumps.App):
             self.item_mic,
             self.item_calendar,
             None,
+            self.item_groq,
             self.item_key,
             self.item_perms,
             self.item_tutorial,
@@ -602,11 +604,12 @@ class LocalFlowApp(rumps.App):
             self._set_icon(self._idle_state())
             first = not self.config.data.get("onboarded")
             after = self.tutorial.show if first else None
-            if voxtral.api_key():
+            if voxtral.groq_key():
                 self.item_status.title = "Prêt — maintenir fn, ou fn+espace"
-            else:   # le tutoriel a une étape pour la clé ; déjà installé sans clé : la fenêtre de saisie
-                self.item_status.title = "Clé Voxtral manquante — menu « Clé Voxtral… »"
-                after = after or self._ask_key
+            else:   # Mistral a coupé ses clés gratuites (20/11/2026) : tutoriel Groq à chaque lancement tant qu'il manque
+                self.item_status.title = "Dictée : passe à Groq — menu « Passer à Groq (gratuit)… »"
+                prev = after
+                after = lambda: self._ask_groq(then=prev)
             if self.perms.missing():
                 self.perms.show(on_done=after)
             elif after:
@@ -693,8 +696,27 @@ class LocalFlowApp(rumps.App):
 
         threading.Thread(target=run, daemon=True, name="cle-voxtral").start()
 
+    def _ask_groq(self, _item=None, then=None):
+        """Tutoriel de passage à Groq : menu, lancement sans clé Groq, ou dictée ratée sans Groq."""
+        if getattr(self, "_groq_dialog_open", False):
+            return
+        self._groq_dialog_open = True
+
+        def run():
+            try:
+                if keydialog.ask_groq_key(_notify):
+                    _on_main(self._key_saved)
+            except Exception:
+                _log("passage à Groq:\n" + traceback.format_exc())
+            finally:
+                self._groq_dialog_open = False
+            if then:
+                _on_main(then)
+
+        threading.Thread(target=run, daemon=True, name="cle-groq").start()
+
     def _key_saved(self):
-        if self.item_status.title.startswith("Clé Voxtral"):
+        if self.item_status.title.startswith(("Clé Voxtral", "Dictée : passe à Groq")):
             self.item_status.title = "Prêt — maintenir fn, ou fn+espace"
 
     def _tutorial_key_action(self, done):
@@ -1485,7 +1507,10 @@ class LocalFlowApp(rumps.App):
                 path = self._keep_failed(audio)
                 _log(f"dictée non transcrite, audio gardé : {path}")
                 if path:
-                    if isinstance(exc, voxtral.MissingKey):
+                    if not voxtral.groq_key():
+                        _notify("Dictée en pause : passe à Groq", "Gratuit, 2 min : cette dictée arrivera dans l'Historique.")
+                        _on_main(self._ask_groq)
+                    elif isinstance(exc, voxtral.MissingKey):
                         _notify("Clé Voxtral manquante", "Ajoute-la : cette dictée arrivera dans l'Historique.")
                         _on_main(self._ask_key)
                     else:

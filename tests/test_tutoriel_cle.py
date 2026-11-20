@@ -74,7 +74,8 @@ class EtapeCle(unittest.TestCase):
         self.assertEqual(len(steps), len(tutorial.STEPS) - 1)
 
     def test_etape_presente_sans_cle(self):
-        with mock.patch.object(tutorial.voxtral, "api_key", return_value=""):
+        with mock.patch.object(tutorial.voxtral, "api_key", return_value=""), \
+             mock.patch.object(tutorial.voxtral, "groq_key", return_value=""):
             steps = tutorial.Tutorial._visible_steps()
         self.assertEqual(len(steps), len(tutorial.STEPS))
 

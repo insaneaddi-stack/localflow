@@ -34,3 +34,39 @@ class GroqSecours(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TutorielGroq(unittest.TestCase):
+    """La fenêtre de passage à Groq : ouvrir la page, refuser une non-clé, enregistrer une bonne clé."""
+
+    def run_dialog(self, reponses, check=True):
+        from localflow import keydialog
+        vus, ouvert, ranges, notes = [], [], [], []
+        it = iter(reponses)
+        def dialog(message, buttons, default, title):
+            vus.append(message)
+            return next(it)
+        ok = keydialog.ask_groq_key(lambda *a: notes.append(a), dialog=dialog, open_page=lambda: ouvert.append(1),
+                                    check=lambda k: check, save=ranges.append)
+        return ok, vus, ouvert, ranges, notes
+
+    def test_parcours_complet(self):
+        cle = "gsk_" + "a" * 52
+        ok, vus, ouvert, ranges, notes = self.run_dialog([("Ouvrir Groq", ""), ("Valider", "pas une clé"), ("Valider", cle)])
+        self.assertTrue(ok)
+        self.assertEqual(ouvert, [1])
+        self.assertIn("gsk_", vus[2])          # 2e passage : « ce n'est pas une clé Groq »
+        self.assertEqual(ranges, [cle])
+        self.assertEqual(notes[0][0], "Groq branché")
+
+    def test_plus_tard(self):
+        ok, _, _, ranges, _ = self.run_dialog([("Plus tard", "")])
+        self.assertFalse(ok)
+        self.assertEqual(ranges, [])
+
+    def test_cle_refusee(self):
+        cle = "gsk_" + "b" * 52
+        ok, vus, _, ranges, _ = self.run_dialog([("Valider", cle), ("Plus tard", "")], check=False)
+        self.assertFalse(ok)
+        self.assertIn("refuse", vus[1])
+        self.assertEqual(ranges, [])

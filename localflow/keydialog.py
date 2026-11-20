@@ -17,11 +17,11 @@ CONSIGNE = ("1. Ouvre la console Mistral → API Keys → Create new key.\n"
             f"3. Clique « {VALIDER} ».\n\n"
             "Elle reste dans le trousseau de ce Mac.")
 
-def _dialog(message, buttons, default):
+def _dialog(message, buttons, default, title="Clé Voxtral"):
     """(bouton cliqué, texte du champ) ; ("", "") si fenêtre fermée ou 5 min sans réponse."""
     q = lambda t: json.dumps(t, ensure_ascii=False)
     script = ("tell current application to activate\n"
-              f"display dialog {q(message)} default answer \"\" with title \"Clé Voxtral\" "
+              f"display dialog {q(message)} default answer \"\" with title {q(title)} "
               f"buttons {{{', '.join(q(b) for b in buttons)}}} default button {q(default)} "
               "with icon note giving up after 300")
     out = subprocess.run(["osascript", "-e", script], capture_output=True, text=True).stdout
@@ -63,6 +63,42 @@ def _store(key, check, save):
         return "refused"
     save(key)
     return "ok" if valid else "unverified"
+
+
+GROQ_URL = "https://console.groq.com/keys"
+GROQ_OUVRIR = "Ouvrir Groq"
+GROQ_TITRE = "Dictée : passe à Groq (gratuit)"
+GROQ_CONSIGNE = ("Mistral a arrêté sa version gratuite : ta dictée passe sur Groq, gratuit lui aussi (2 min, une seule fois).\n\n"
+                 f"1. Clique « {GROQ_OUVRIR} » et connecte-toi (Google, c'est le plus rapide).\n"
+                 "2. « Create API Key » → donne-lui un nom (LocalFlow) → « Submit ».\n"
+                 "3. Copie la clé (elle commence par gsk_), reviens ici, colle-la ci-dessous (⌘V).\n"
+                 f"4. Clique « {VALIDER} ».\n\n"
+                 "Elle reste dans le trousseau de ce Mac.")
+
+
+def ask_groq_key(notify, dialog=_dialog, open_page=lambda: subprocess.run(["open", GROQ_URL]),
+                 check=voxtral.check_groq_key, save=voxtral.save_groq_key):
+    """Tutoriel de passage à Groq. True si une clé a été enregistrée, False si remis à plus tard."""
+    message = GROQ_CONSIGNE
+    while True:
+        rep, text = dialog(message, (PLUS_TARD, GROQ_OUVRIR, VALIDER), GROQ_OUVRIR, GROQ_TITRE)
+        if rep == GROQ_OUVRIR:
+            open_page()
+            message = GROQ_CONSIGNE
+            continue
+        if rep != VALIDER:
+            return False
+        key = (text or "").strip()
+        if not voxtral.looks_like_groq_key(key):
+            message = f"Ce n'est pas une clé Groq (elle commence par gsk_).\nColle-la dans le champ (⌘V), puis « {VALIDER} »."
+            continue
+        valid = check(key)
+        if valid is False:
+            message = f"Groq refuse cette clé. Recopie-la depuis la page Groq, colle-la (⌘V), puis « {VALIDER} »."
+            continue
+        save(key)
+        notify("Groq branché", "Tu peux dicter." if valid else "Je n'ai pas pu la vérifier (pas de réseau ?), elle est enregistrée.")
+        return True
 
 
 def ask_key(notify, dialog=_dialog, open_console=open_console,

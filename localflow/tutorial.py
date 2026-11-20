@@ -311,7 +311,7 @@ class Tutorial:
     @staticmethod
     def _visible_steps():
         """Toutes les étapes, sauf celle de la clé quand elle est déjà dans le trousseau."""
-        return [s for s in STEPS if not (s.get("needs_key") and voxtral.api_key())]
+        return [s for s in STEPS if not (s.get("needs_key") and (voxtral.api_key() or voxtral.groq_key()))]
 
     def _enter_step(self):
         self._step_t0 = time.time()
@@ -369,7 +369,7 @@ class Tutorial:
         wait = step["wait"]
         if wait == "key_set":
             label = "Coller la clé" if self._key_ready else "Ouvrir la console"
-            if voxtral.api_key():   # la clé est arrivée par ailleurs (menu « Clé Voxtral… »)
+            if voxtral.api_key() or voxtral.groq_key():   # la clé est arrivée par ailleurs (menu « Clé Voxtral… »)
                 self._advance(); return
         else:
             label = "Terminer" if self.index == len(self.steps) - 1 else ("Passer" if wait == "dictated" else "Suivant")
