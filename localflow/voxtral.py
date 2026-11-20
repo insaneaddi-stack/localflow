@@ -28,6 +28,9 @@ import numpy as np
 URL = "https://api.mistral.ai/v1/audio/transcriptions"
 MODEL = "voxtral-mini-latest"
 KEYCHAIN_SERVICE = "localflow-mistral"
+GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+GROQ_MODEL = "whisper-large-v3-turbo"
+GROQ_KEYCHAIN_SERVICE = "localflow-groq"
 MODELS_URL = "https://api.mistral.ai/v1/models"   # GET gratuit : sert à vérifier une clé
 SAMPLE_RATE = 16000
 TIMEOUT_S = 6.0            # dictée courte ; on ajoute du temps selon la longueur de l'audio
@@ -127,17 +130,59 @@ def _multipart(fields, audio_wav):
     return boundary, b"".join(parts)
 
 
+def groq_key():
+    """Clé Groq : trousseau macOS (service localflow-groq), sinon $GROQ_API_KEY. Vide = Voxtral seul."""
+    try:
+        out = subprocess.run(["/usr/bin/security", "find-generic-password", "-s", GROQ_KEYCHAIN_SERVICE, "-w"],
+                             capture_output=True, text=True, timeout=5)
+        k = out.stdout.strip() if out.returncode == 0 else ""
+    except Exception:
+        k = ""
+    return k or os.environ.get("GROQ_API_KEY", "").strip()
+
+
+def groq_api(audio, prompt, language, key, timeout):
+    """Texte Whisper chez Groq (gratuit, 2 000 dictées/jour). Le vocabulaire passe en « prompt » (Whisper)."""
+    fields = [("model", GROQ_MODEL), ("temperature", "0")]
+    if language:
+        fields.append(("language", language))
+    if prompt:
+        fields.append(("prompt", ", ".join(bias_terms(prompt))[:600]))
+    boundary, body = _multipart(fields, wav_bytes(audio))
+    req = urllib.request.Request(GROQ_URL, data=body, method="POST", headers={
+        "User-Agent": "LocalFlow/1.0",   # sans ça, Cloudflare (devant Groq) refuse « Python-urllib » : 403, code 1010
+        "Authorization": f"Bearer {key}",
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+    })
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return (json.load(r).get("text") or "").strip()
+
+
 def transcribe_api(audio, prompt="", language="", key=None, timeout=None):
-    """Texte Voxtral. Lève en cas d'erreur réseau / HTTP / délai dépassé.
+    """Texte : Groq (gratuit) d'abord, Voxtral en secours (Mistral a coupé ses clés gratuites le 20/11/2026).
+    Lève en cas d'erreur réseau / HTTP / délai dépassé.
 
     language vide = détection automatique : mesuré, aussi juste que « fr » sur
     du français, et ne déforme pas l'anglais."""
-    key = key or api_key()
-    if not key:
-        raise MissingKey("clé Mistral absente du trousseau")
     seconds = len(audio) / SAMPLE_RATE
     if timeout is None:
         timeout = min(TIMEOUT_MAX_S, TIMEOUT_S + TIMEOUT_PER_AUDIO_S * seconds)
+    gk = groq_key()
+    if gk:
+        try:
+            return groq_api(audio, prompt, language, gk, timeout)
+        except Exception as groq_exc:
+            try:
+                return _voxtral_api(audio, prompt, language, key, timeout)
+            except Exception:
+                raise groq_exc   # secours absent ou refusé : l'erreur de Groq remonte (Engine redemande si passagère)
+    return _voxtral_api(audio, prompt, language, key, timeout)
+
+
+def _voxtral_api(audio, prompt, language, key, timeout):
+    key = key or api_key()
+    if not key:
+        raise MissingKey("clé Mistral absente du trousseau")
     fields = [("model", MODEL)]
     if language:
         fields.append(("language", language))
